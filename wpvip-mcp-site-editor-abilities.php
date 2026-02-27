@@ -12,8 +12,8 @@
  * MCP abilities (Section 5) call WordPress APIs directly and are protected
  * by their own `manage_network_options` permission callbacks.
  *
- * Drop this file alongside wpvip-multisite-mcp-abilities.php in your
- * mu-plugins directory (or require it from that file).
+ * This file is loaded by wpvip-multisite-mcp-abilities.php — both files
+ * live in the WPVIP-Multisite-MCP-Abilities plugin directory.
  *
  * @package wpvip-multisite-mcp-abilities
  * @since   1.3.0

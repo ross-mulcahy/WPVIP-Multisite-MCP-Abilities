@@ -10,6 +10,8 @@
  * Requires PHP: 8.0
  * Requires WP:  6.9
  * Network:     true
+ * License:     GPL-2.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  *
  * @package wpvip-multisite-mcp-abilities
  */
@@ -18,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-require_once plugin_dir_path( __FILE__ ) . 'wpvip-mcp-site-editor-abilities.php';
+require_once __DIR__ . '/wpvip-mcp-site-editor-abilities.php';
 
 // Core wp_register_ability_category() requires doing_action('wp_abilities_api_categories_init').
 // Core wp_register_ability() requires doing_action('wp_abilities_api_init').

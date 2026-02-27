@@ -12,15 +12,20 @@ A WordPress network (mu-plugin) that registers 26 MCP abilities for managing a W
 
 ## Installation
 
-Drop both files into your `mu-plugins` directory:
+1. Clone or download this repository into your `wp-content/plugins/` directory:
 
 ```
-wp-content/mu-plugins/
-├── wpvip-multisite-mcp-abilities.php   ← Main plugin file (auto-loads site editor file)
-└── wpvip-mcp-site-editor-abilities.php ← Site Editor abilities + REST defence-in-depth
+wp-content/plugins/
+└── WPVIP-Multisite-MCP-Abilities/
+    ├── wpvip-multisite-mcp-abilities.php   ← Main plugin file (auto-loads site editor file)
+    ├── wpvip-mcp-site-editor-abilities.php ← Site Editor abilities + REST defence-in-depth
+    ├── README.md
+    └── LICENSE
 ```
 
-The main file `require_once`s the site editor file — no additional loader needed.
+2. **Network Activate** the plugin from the Network Admin → Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
+
+This is a network-only plugin (`Network: true` in the plugin header). It must be network-activated to function.
 
 ## Permissions
 
