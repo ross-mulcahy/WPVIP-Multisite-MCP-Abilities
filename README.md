@@ -1,4 +1,4 @@
-# VIP Multisite MCP Abilities
+# WPVIP Multisite MCP Abilities
 
 A WordPress network (mu-plugin) that registers 26 MCP abilities for managing a WordPress Multisite installation via AI agents. Covers site management, content operations, Site Editor templates/template-parts/patterns, theme activation, user management, and site options.
 
@@ -16,8 +16,8 @@ Drop both files into your `mu-plugins` directory:
 
 ```
 wp-content/mu-plugins/
-├── vip-multisite-mcp-abilities.php   ← Main plugin file (auto-loads site editor file)
-└── vip-mcp-site-editor-abilities.php ← Site Editor abilities + REST defence-in-depth
+├── wpvip-multisite-mcp-abilities.php   ← Main plugin file (auto-loads site editor file)
+└── wpvip-mcp-site-editor-abilities.php ← Site Editor abilities + REST defence-in-depth
 ```
 
 The main file `require_once`s the site editor file — no additional loader needed.
@@ -102,9 +102,9 @@ Every ability requires **`manage_network_options`** (Super Admin). There are no 
 
 The plugin is split into two files:
 
-**`vip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category and all network/content/options abilities. Loads the site editor file via `require_once`.
+**`wpvip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category and all network/content/options abilities. Loads the site editor file via `require_once`.
 
-**`vip-mcp-site-editor-abilities.php`** — Site Editor abilities plus REST API defence-in-depth infrastructure. Organised into five sections:
+**`wpvip-mcp-site-editor-abilities.php`** — Site Editor abilities plus REST API defence-in-depth infrastructure. Organised into five sections:
 
 1. **REST API Support** — Ensures `wp_template`, `wp_template_part`, and `wp_block` post types are exposed via REST with correct controllers.
 2. **Permissions** — `map_meta_cap` filter grants `edit_theme_options` users CRUD access to Site Editor post types via REST. Uses a static recursion guard. Delete capabilities are intentionally excluded.
