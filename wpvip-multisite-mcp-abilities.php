@@ -6,7 +6,7 @@
  *              Enables creating sites, activating themes, managing users, and listing network
  *              resources — all accessible via MCP-connected AI agents.
  * Version:     1.2.3
- * Author:      WordPress VIP
+ * Author:      Ross Mulcahy
  * Requires PHP: 8.0
  * Requires WP:  6.9
  * Network:     true
