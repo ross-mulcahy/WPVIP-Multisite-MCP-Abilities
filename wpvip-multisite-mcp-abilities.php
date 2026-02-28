@@ -5,7 +5,7 @@
  * Description: Registers WordPress Multisite network management abilities for MCP/AI access.
  *              Enables creating sites, activating themes, managing users, and listing network
  *              resources — all accessible via MCP-connected AI agents.
- * Version:     1.2.3
+ * Version:     1.3.0
  * Author:      Ross Mulcahy
  * Requires PHP: 8.0
  * Requires WP:  6.9
