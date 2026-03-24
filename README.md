@@ -1,6 +1,6 @@
 # WPVIP MCP Abilities
 
-A WordPress plugin (v1.5.2) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
+A WordPress plugin (v1.5.3) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
 
 ## Requirements
 
@@ -23,9 +23,9 @@ wp-content/plugins/
     └── LICENSE
 ```
 
-2. **Activate** the plugin from the Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities`). On Multisite, network-activate from Network Admin → Plugins (or `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
+2. **Activate** the plugin from the Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities`). On Multisite, you can also network-activate from Network Admin → Plugins (or `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
 
-On single-site, 18 site-level abilities register. On Multisite, all 28 abilities register.
+On single-site, 18 site-level abilities register. On Multisite, all 28 abilities register (whether activated per-site or network-wide).
 
 ## Permissions
 
@@ -168,6 +168,9 @@ composer run lint         # Run both PHPCS and PHPStan
 ```
 
 ## Changelog
+
+### 1.5.3
+- Removed `Network: true` plugin header so the plugin can be activated on single-site installations
 
 ### 1.5.2
 - Fixed `get-template-part` output schema: `area` field now allows `null` for template parts without an explicit area assignment
