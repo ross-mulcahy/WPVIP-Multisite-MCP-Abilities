@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WordPress plugin (v1.5.0) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite. Requires PHP 8.0+, WordPress 6.9+. No external dependencies.
+WordPress plugin (v1.5.1) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite. Requires PHP 8.0+, WordPress 6.9+. No external dependencies.
 
 ## Repository Structure
 
