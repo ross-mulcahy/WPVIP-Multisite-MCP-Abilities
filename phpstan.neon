@@ -1,0 +1,18 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - wpvip-multisite-mcp-abilities.php
+        - wpvip-mcp-site-editor-abilities.php
+
+    # WordPress stubs cover core functions/classes. These additional functions
+    # are from the Abilities API which is not yet in core stubs.
+    ignoreErrors:
+        -
+            identifier: function.notFound
+            message: '#^Function (wp_register_ability|wp_register_ability_category|wp_get_abilities) not found\.$#'
+        -
+            identifier: argument.type
+            message: '#^Parameter .* of function wp_register_ability expects#'

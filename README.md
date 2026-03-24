@@ -29,7 +29,18 @@ This is a network-only plugin (`Network: true` in the plugin header). It must be
 
 ## Permissions
 
-Every ability requires **`manage_network_options`** (Super Admin). There are no public or lower-privilege abilities. This is intentional — these abilities perform network-wide operations.
+Abilities use a two-layer permission model:
+
+1. **`permission_callback`** — gates whether the ability is visible to the user (baseline capability check)
+2. **`execute_callback`** — enforces per-site capabilities after `switch_to_blog()` to ensure the user has the right permissions on the target site
+
+| Ability group | permission_callback | Per-site check |
+|---|---|---|
+| Network ops (sites, users, themes, plugins) | `manage_network_options` | — |
+| Content reads (list-post-types, get-post, list-posts) | `read` | `read` / `read_post` on target site |
+| Content writes (create-post, update-post) | `edit_posts` | Post-type caps (`edit_posts`, `publish_posts`) on target site |
+| Site options (get/update) | `manage_options` | `manage_options` on target site |
+| Site editor (templates, parts, patterns) | `edit_theme_options` | `edit_theme_options` on target site |
 
 ## Abilities Reference
 
@@ -131,7 +142,7 @@ The plugin is split into two files:
 
 | Layer | Protection |
 |-------|-----------|
-| MCP abilities | `manage_network_options` permission callback on every ability |
+| MCP abilities | Two-layer permission model: `permission_callback` for visibility + per-site capability check in `execute_callback` |
 | REST endpoints | Authentication required + `edit_theme_options` capability check |
 | Content writes | `wp_kses_post` for non-super-admin users; `wp_strip_all_tags` for titles; `sanitize_textarea_field` for excerpts/descriptions |
 | Options writes | Explicit allowlist — unlisted keys are silently skipped |
