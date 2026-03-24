@@ -1,6 +1,6 @@
 # WPVIP MCP Abilities
 
-A WordPress plugin (v1.5.0) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
+A WordPress plugin (v1.5.1) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
 
 ## Requirements
 
@@ -168,6 +168,9 @@ composer run lint         # Run both PHPCS and PHPStan
 ```
 
 ## Changelog
+
+### 1.5.1
+- Fixed infinite recursion in `vip_mcp_switch_to_site()` and `vip_mcp_restore_site()` helpers that caused all site-context abilities to return HTTP 500
 
 ### 1.5.0
 - **Single-site compatibility** — site-level abilities (content, options, Site Editor) now register on both single-site and Multisite installations; network-level abilities remain Multisite-only
