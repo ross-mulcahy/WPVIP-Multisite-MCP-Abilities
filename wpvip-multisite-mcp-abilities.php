@@ -64,7 +64,7 @@ function vip_mcp_validate_site( int $site_id ): bool {
  */
 function vip_mcp_switch_to_site( int $site_id ): void {
 	if ( is_multisite() ) {
-		vip_mcp_switch_to_site( $site_id );
+		switch_to_blog( $site_id );
 	}
 }
 
@@ -73,7 +73,7 @@ function vip_mcp_switch_to_site( int $site_id ): void {
  */
 function vip_mcp_restore_site(): void {
 	if ( is_multisite() ) {
-		vip_mcp_restore_site();
+		restore_current_blog();
 	}
 }
 
