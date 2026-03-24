@@ -5,11 +5,10 @@
  * Description: Registers WordPress MCP abilities for managing content, Site Editor, options,
  *              and (on Multisite) network-level resources via MCP-connected AI agents.
  *              Works on both single-site and Multisite installations.
- * Version:     1.5.2
+ * Version:     1.5.3
  * Author:      Ross Mulcahy
  * Requires PHP: 8.0
  * Requires WP:  6.9
- * Network:     true
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  *
