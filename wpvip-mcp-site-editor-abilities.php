@@ -10,7 +10,7 @@
  * to ensure these post types are accessible and secured when accessed by
  * non-MCP REST clients (e.g. the Gutenberg editor, external integrations).
  * MCP abilities (Section 5) call WordPress APIs directly and are protected
- * by their own `manage_network_options` permission callbacks.
+ * by their own permission callbacks with per-site capability enforcement.
  *
  * This file is loaded by wpvip-multisite-mcp-abilities.php — both files
  * live in the WPVIP-Multisite-MCP-Abilities plugin directory.
@@ -41,6 +41,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 add_action( 'rest_api_init', 'vip_mcp_ensure_site_editor_rest_support' );
 
+/**
+ * Force wp_template, wp_template_part, and wp_block to have REST API support.
+ *
+ * Ensures each post type has show_in_rest enabled, a rest_base value, and
+ * a rest_controller_class assigned so they are fully accessible via REST.
+ *
+ * @return void
+ */
 function vip_mcp_ensure_site_editor_rest_support(): void {
 	$post_types = array(
 		'wp_template'      => 'templates',
@@ -78,7 +86,7 @@ function vip_mcp_ensure_site_editor_rest_support(): void {
 // 2. PERMISSIONS — grant authenticated users access via REST.
 //
 // Defence-in-depth for REST API consumers. MCP abilities use their own
-// `manage_network_options` permission callback and do not rely on this.
+// `edit_theme_options` permission callback and do not rely on this.
 // =========================================================================
 
 /**
@@ -94,6 +102,20 @@ function vip_mcp_ensure_site_editor_rest_support(): void {
  */
 add_filter( 'map_meta_cap', 'vip_mcp_map_site_editor_caps', 10, 4 );
 
+/**
+ * Map Site Editor capabilities to edit_theme_options via map_meta_cap.
+ *
+ * Grants users who have 'edit_theme_options' the ability to perform CRUD
+ * operations on Site Editor post types (wp_template, wp_template_part,
+ * wp_block) via the REST API. Uses a static recursion guard to prevent
+ * infinite loops when checking capabilities.
+ *
+ * @param string[] $caps    The required primitive capabilities.
+ * @param string   $cap     The capability being checked.
+ * @param int      $user_id The user ID being checked.
+ * @param mixed[]  $args    Additional arguments passed to the capability check.
+ * @return string[] The mapped capabilities.
+ */
 function vip_mcp_map_site_editor_caps( array $caps, string $cap, int $user_id, array $args ): array {
 	static $checking = false;
 
@@ -152,8 +174,20 @@ function vip_mcp_map_site_editor_caps( array $caps, string $cap, int $user_id, a
  */
 add_filter( 'rest_pre_dispatch', 'vip_mcp_require_auth_for_site_editor_rest', 10, 3 );
 
+/**
+ * Block unauthenticated REST access to Site Editor endpoints.
+ *
+ * Fires before any REST endpoint callback via rest_pre_dispatch and rejects
+ * requests to /wp/v2/templates, /wp/v2/template-parts, and /wp/v2/blocks
+ * that lack valid authentication or sufficient capabilities.
+ *
+ * @param mixed           $result  Response to replace the requested version with, or null to proceed.
+ * @param WP_REST_Server  $server  Server instance.
+ * @param WP_REST_Request $request Request used to generate the response.
+ * @return mixed|WP_Error The original result, or a WP_Error if access is denied.
+ */
 function vip_mcp_require_auth_for_site_editor_rest( $result, WP_REST_Server $server, WP_REST_Request $request ) {
-	$route = $request->get_route();
+	$route          = $request->get_route();
 	$gated_prefixes = array(
 		'/wp/v2/templates',
 		'/wp/v2/template-parts',
@@ -202,20 +236,32 @@ function vip_mcp_require_auth_for_site_editor_rest( $result, WP_REST_Server $ser
  */
 add_action( 'init', 'vip_mcp_register_pattern_meta', 99 );
 
+/**
+ * Register wp_pattern_sync_status meta for the wp_block post type.
+ *
+ * Makes the sync status metadata readable and writable through the REST
+ * API with appropriate sanitization and authorization callbacks.
+ *
+ * @return void
+ */
 function vip_mcp_register_pattern_meta(): void {
 	// wp_pattern_sync_status: '' (fully synced) or 'unsynced'.
-	register_post_meta( 'wp_block', 'wp_pattern_sync_status', array(
-		'type'              => 'string',
-		'description'       => 'Sync status of the pattern. Empty string means fully synced; "unsynced" means it is a standard (non-synced) pattern.',
-		'single'            => true,
-		'show_in_rest'      => true,
-		'sanitize_callback' => static function ( $value ) {
-			return in_array( $value, array( '', 'unsynced' ), true ) ? $value : '';
-		},
-		'auth_callback'     => static function () {
-			return current_user_can( 'edit_theme_options' );
-		},
-	) );
+	register_post_meta(
+		'wp_block',
+		'wp_pattern_sync_status',
+		array(
+			'type'              => 'string',
+			'description'       => 'Sync status of the pattern. Empty string means fully synced; "unsynced" means it is a standard (non-synced) pattern.',
+			'single'            => true,
+			'show_in_rest'      => true,
+			'sanitize_callback' => static function ( $value ) {
+				return in_array( $value, array( '', 'unsynced' ), true ) ? $value : '';
+			},
+			'auth_callback'     => static function () {
+				return current_user_can( 'edit_theme_options' );
+			},
+		)
+	);
 }
 
 /**
@@ -223,6 +269,14 @@ function vip_mcp_register_pattern_meta(): void {
  */
 add_action( 'rest_api_init', 'vip_mcp_ensure_pattern_category_rest' );
 
+/**
+ * Ensure the wp_pattern_category taxonomy is REST-visible.
+ *
+ * Enables show_in_rest and sets a sensible rest_base for the taxonomy
+ * so it can be accessed via the REST API.
+ *
+ * @return void
+ */
 function vip_mcp_ensure_pattern_category_rest(): void {
 	$taxonomy = get_taxonomy( 'wp_pattern_category' );
 	if ( $taxonomy && ! $taxonomy->show_in_rest ) {
@@ -239,14 +293,14 @@ function vip_mcp_ensure_pattern_category_rest(): void {
 //
 // These call WordPress APIs directly (get_block_templates, wp_insert_post,
 // etc.) and do NOT route through the REST API. Each ability has its own
-// permission callback requiring `manage_network_options`.
+// permission callback plus per-site `edit_theme_options` enforcement.
 // =========================================================================
 
 /**
  * Sanitize post content for MCP write operations.
  *
- * MCP abilities require `manage_network_options` (super admin). Super admins
- * have `unfiltered_html`, so wp_kses_post() should not strip their content —
+ * Users with `unfiltered_html` capability (typically super admins) should
+ * not have their content stripped by wp_kses_post() —
  * block markup frequently uses data-* attributes, inline styles, and custom
  * elements that wp_kses_post() would mangle. This mirrors how Gutenberg's
  * own REST controllers handle template content for privileged users.
@@ -294,12 +348,16 @@ function vip_mcp_resolve_pattern_categories( array $slugs ): array {
 
 add_action( 'wp_abilities_api_init', 'vip_mcp_register_site_editor_abilities' );
 
+/**
+ * Register all Site Editor MCP abilities.
+ *
+ * Registers MCP abilities for listing, getting, updating, and creating
+ * templates, template parts, and synced patterns across network sub-sites.
+ *
+ * @return void
+ */
 function vip_mcp_register_site_editor_abilities(): void {
 	if ( ! function_exists( 'wp_register_ability' ) ) {
-		return;
-	}
-
-	if ( ! is_multisite() ) {
 		return;
 	}
 
@@ -331,20 +389,20 @@ function vip_mcp_register_ability_list_templates(): void {
 	wp_register_ability(
 		'vip-multisite/list-templates',
 		array(
-			'label'       => 'List Site Editor Templates',
-			'description' => 'Returns all templates (wp_template) for a specific network sub-site. Includes both theme-supplied and user-customised templates.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Site Editor Templates',
+			'description'         => 'Returns all templates (wp_template) for a specific network sub-site. Includes both theme-supplied and user-customised templates.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
-				'required'   => array( 'site_id' ),
+				'required'   => vip_mcp_required_with_site_id(),
 				'properties' => array(
 					'site_id' => array(
 						'type'        => 'integer',
-						'description' => 'The ID of the sub-site.',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'   => array( 'type' => 'boolean' ),
@@ -354,38 +412,52 @@ function vip_mcp_register_ability_list_templates(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'templates' => array(), 'total' => 0, 'message' => "Site ID {$site_id} not found." );
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'   => false,
+						'templates' => array(),
+						'total'     => 0,
+						'message'   => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$result = array();
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success'   => false,
+							'templates' => array(),
+							'total'     => 0,
+							'message'   => "You do not have permission to list templates on site {$site_id}.",
+						);
+					}
+
 					$templates = get_block_templates( array(), 'wp_template' );
 
 					foreach ( $templates as $template ) {
 						$result[] = array(
 							'id'          => $template->id,           // e.g. theme-slug//index.
 							'slug'        => $template->slug,
-							'title'       => is_string( $template->title ) ? $template->title : ( $template->title['rendered'] ?? $template->slug ),
-							'description' => $template->description ?? '',
+							'title'       => $template->title,
+							'description' => $template->description,
 							'theme'       => $template->theme,
-							'source'      => $template->source,       // 'theme' or 'custom'.
-							'type'        => $template->type,         // 'wp_template'.
+							'source'      => $template->source,       // Either theme or custom.
+							'type'        => $template->type,         // wp_template.
 							'has_post'    => ! empty( $template->wp_id ), // true if user-customised.
-							'post_id'     => $template->wp_id ?: null,
+							'post_id'     => $template->wp_id ? $template->wp_id : null,
 							// Theme-sourced templates (from files) do not have a modified
 							// date — only customised posts stored in the DB do.
 							'modified'    => $template->modified ?? null,
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -395,7 +467,7 @@ function vip_mcp_register_ability_list_templates(): void {
 					'message'   => sprintf( 'Retrieved %d template(s) from site %d.', count( $result ), $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -408,18 +480,24 @@ function vip_mcp_register_ability_get_template(): void {
 	wp_register_ability(
 		'vip-multisite/get-template',
 		array(
-			'label'       => 'Get Site Editor Template',
-			'description' => 'Retrieves a specific template (wp_template) from a sub-site by its ID (e.g. "theme-slug//index"), including its full block markup content.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'template_id' ),
+			'label'               => 'Get Site Editor Template',
+			'description'         => 'Retrieves a specific template (wp_template) from a sub-site by its ID (e.g. "theme-slug//index"), including its full block markup content.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'template_id' ) ),
 				'properties' => array(
-					'site_id'     => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'template_id' => array( 'type' => 'string', 'description' => 'The template ID in theme-slug//slug format (e.g. "theme-slug//index").' ),
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'template_id' => array(
+						'type'        => 'string',
+						'description' => 'The template ID in theme-slug//slug format (e.g. "theme-slug//index").',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'     => array( 'type' => 'boolean' ),
@@ -436,46 +514,62 @@ function vip_mcp_register_ability_get_template(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id     = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id     = vip_mcp_resolve_site_id( $input );
 				$template_id = sanitize_text_field( $input['template_id'] );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'message' => "You do not have permission to manage templates on site {$site_id}.",
+						);
+					}
+
 					$template = get_block_template( $template_id, 'wp_template' );
 
 					if ( ! $template ) {
-						$response = array( 'success' => false, 'message' => "Template '{$template_id}' not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'message' => "Template '{$template_id}' not found on site {$site_id}.",
+						);
 					} else {
 						$response = array(
 							'success'     => true,
 							'id'          => $template->id,
 							'slug'        => $template->slug,
-							'title'       => is_string( $template->title ) ? $template->title : ( $template->title['rendered'] ?? $template->slug ),
-							'description' => $template->description ?? '',
+							'title'       => $template->title,
+							'description' => $template->description,
 							'content'     => $template->content,
 							'theme'       => $template->theme,
 							'source'      => $template->source,
 							'has_post'    => ! empty( $template->wp_id ),
-							'post_id'     => $template->wp_id ?: 0,
+							'post_id'     => $template->wp_id ? $template->wp_id : 0,
 							'message'     => 'Template retrieved successfully.',
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -492,21 +586,38 @@ function vip_mcp_register_ability_update_template(): void {
 	wp_register_ability(
 		'vip-multisite/update-template',
 		array(
-			'label'       => 'Update Site Editor Template',
-			'description' => 'Updates a template on a sub-site. All fields except site_id and template_id are optional — only include fields you want to change. If the template has not been customised yet, this creates the custom override post. Accepts the template ID in theme-slug//slug format.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'template_id' ),
+			'label'               => 'Update Site Editor Template',
+			'description'         => 'Updates a template on a sub-site. All fields except site_id and template_id are optional '
+				. '— only include fields you want to change. If the template has not been customised yet, '
+				. 'this creates the custom override post. Accepts the template ID in theme-slug//slug format.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'template_id' ) ),
 				'properties' => array(
-					'site_id'     => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'template_id' => array( 'type' => 'string', 'description' => 'The template ID in theme-slug//slug format.' ),
-					'content'     => array( 'type' => 'string', 'description' => 'New block markup content for the template.' ),
-					'title'       => array( 'type' => 'string', 'description' => 'Optional new title for the template.' ),
-					'description' => array( 'type' => 'string', 'description' => 'Optional new description.' ),
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'template_id' => array(
+						'type'        => 'string',
+						'description' => 'The template ID in theme-slug//slug format.',
+					),
+					'content'     => array(
+						'type'        => 'string',
+						'description' => 'New block markup content for the template.',
+					),
+					'title'       => array(
+						'type'        => 'string',
+						'description' => 'Optional new title for the template.',
+					),
+					'description' => array(
+						'type'        => 'string',
+						'description' => 'Optional new description.',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -515,24 +626,43 @@ function vip_mcp_register_ability_update_template(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id     = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id     = vip_mcp_resolve_site_id( $input );
 				$template_id = sanitize_text_field( $input['template_id'] );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => 0, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'post_id' => 0,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => "You do not have permission to edit templates on site {$site_id}.",
+						);
+					}
+
 					$template = get_block_template( $template_id, 'wp_template' );
 
 					if ( ! $template ) {
-						$response = array( 'success' => false, 'post_id' => 0, 'message' => "Template '{$template_id}' not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => "Template '{$template_id}' not found on site {$site_id}.",
+						);
 					} else {
 						// Build changes array — only include fields that were provided.
 						$changes = array();
@@ -552,7 +682,11 @@ function vip_mcp_register_ability_update_template(): void {
 						}
 
 						if ( empty( $changes ) ) {
-							$response = array( 'success' => false, 'post_id' => 0, 'message' => 'No fields provided to update.' );
+							$response = array(
+								'success' => false,
+								'post_id' => 0,
+								'message' => 'No fields provided to update.',
+							);
 						} else {
 							if ( ! empty( $template->wp_id ) ) {
 								// Update existing custom override post.
@@ -566,9 +700,7 @@ function vip_mcp_register_ability_update_template(): void {
 
 								// Ensure title is set when creating a new override.
 								if ( ! isset( $changes['post_title'] ) ) {
-									$changes['post_title'] = is_string( $template->title )
-										? $template->title
-										: ( $template->title['rendered'] ?? $template->slug );
+									$changes['post_title'] = $template->title;
 								}
 
 								// Ensure content is set when creating a new override.
@@ -591,7 +723,11 @@ function vip_mcp_register_ability_update_template(): void {
 							}
 
 							if ( is_wp_error( $new_post_id ) ) {
-								$response = array( 'success' => false, 'post_id' => 0, 'message' => $new_post_id->get_error_message() );
+								$response = array(
+									'success' => false,
+									'post_id' => 0,
+									'message' => $new_post_id->get_error_message(),
+								);
 							} else {
 								$response = array(
 									'success' => true,
@@ -602,12 +738,12 @@ function vip_mcp_register_ability_update_template(): void {
 						}
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -624,21 +760,24 @@ function vip_mcp_register_ability_list_template_parts(): void {
 	wp_register_ability(
 		'vip-multisite/list-template-parts',
 		array(
-			'label'       => 'List Site Editor Template Parts',
-			'description' => 'Returns all template parts (wp_template_part) for a specific sub-site, such as headers, footers, and sidebars.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Site Editor Template Parts',
+			'description'         => 'Returns all template parts (wp_template_part) for a specific sub-site, such as headers, footers, and sidebars.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
-				'required'   => array( 'site_id' ),
+				'required'   => vip_mcp_required_with_site_id(),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
+					'site_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
 					'area'    => array(
 						'type'        => 'string',
 						'description' => 'Optional: filter by template part area. Standard values: "header", "footer", "sidebar", "uncategorized".',
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'        => array( 'type' => 'boolean' ),
@@ -648,12 +787,17 @@ function vip_mcp_register_ability_list_template_parts(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'template_parts' => array(), 'total' => 0, 'message' => "Site ID {$site_id} not found." );
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'        => false,
+						'template_parts' => array(),
+						'total'          => 0,
+						'message'        => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$query_args = array();
@@ -663,28 +807,37 @@ function vip_mcp_register_ability_list_template_parts(): void {
 
 				$result = array();
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success'        => false,
+							'template_parts' => array(),
+							'total'          => 0,
+							'message'        => "You do not have permission to list template parts on site {$site_id}.",
+						);
+					}
+
 					$parts = get_block_templates( $query_args, 'wp_template_part' );
 
 					foreach ( $parts as $part ) {
 						$result[] = array(
 							'id'          => $part->id,
 							'slug'        => $part->slug,
-							'title'       => is_string( $part->title ) ? $part->title : ( $part->title['rendered'] ?? $part->slug ),
-							'description' => $part->description ?? '',
+							'title'       => $part->title,
+							'description' => $part->description,
 							'area'        => $part->area,
 							'theme'       => $part->theme,
 							'source'      => $part->source,
 							'has_post'    => ! empty( $part->wp_id ),
-							'post_id'     => $part->wp_id ?: null,
+							'post_id'     => $part->wp_id ? $part->wp_id : null,
 							// Theme-sourced template parts (from files) do not have a
 							// modified date — only customised posts stored in the DB do.
 							'modified'    => $part->modified ?? null,
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -694,7 +847,7 @@ function vip_mcp_register_ability_list_template_parts(): void {
 					'message'        => sprintf( 'Retrieved %d template part(s) from site %d.', count( $result ), $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -707,18 +860,24 @@ function vip_mcp_register_ability_get_template_part(): void {
 	wp_register_ability(
 		'vip-multisite/get-template-part',
 		array(
-			'label'       => 'Get Site Editor Template Part',
-			'description' => 'Retrieves a specific template part from a sub-site by its ID (e.g. "theme-slug//header"), including full block markup content.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'template_part_id' ),
+			'label'               => 'Get Site Editor Template Part',
+			'description'         => 'Retrieves a specific template part from a sub-site by its ID (e.g. "theme-slug//header"), including full block markup content.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'template_part_id' ) ),
 				'properties' => array(
-					'site_id'          => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'template_part_id' => array( 'type' => 'string', 'description' => 'The template part ID in theme-slug//slug format (e.g. "theme-slug//header").' ),
+					'site_id'          => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'template_part_id' => array(
+						'type'        => 'string',
+						'description' => 'The template part ID in theme-slug//slug format (e.g. "theme-slug//header").',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'     => array( 'type' => 'boolean' ),
@@ -736,47 +895,63 @@ function vip_mcp_register_ability_get_template_part(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$part_id = sanitize_text_field( $input['template_part_id'] );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'message' => "You do not have permission to manage template parts on site {$site_id}.",
+						);
+					}
+
 					$part = get_block_template( $part_id, 'wp_template_part' );
 
 					if ( ! $part ) {
-						$response = array( 'success' => false, 'message' => "Template part '{$part_id}' not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'message' => "Template part '{$part_id}' not found on site {$site_id}.",
+						);
 					} else {
 						$response = array(
 							'success'     => true,
 							'id'          => $part->id,
 							'slug'        => $part->slug,
-							'title'       => is_string( $part->title ) ? $part->title : ( $part->title['rendered'] ?? $part->slug ),
-							'description' => $part->description ?? '',
+							'title'       => $part->title,
+							'description' => $part->description,
 							'content'     => $part->content,
 							'area'        => $part->area,
 							'theme'       => $part->theme,
 							'source'      => $part->source,
 							'has_post'    => ! empty( $part->wp_id ),
-							'post_id'     => $part->wp_id ?: 0,
+							'post_id'     => $part->wp_id ? $part->wp_id : 0,
 							'message'     => 'Template part retrieved successfully.',
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -790,18 +965,35 @@ function vip_mcp_register_ability_update_template_part(): void {
 	wp_register_ability(
 		'vip-multisite/update-template-part',
 		array(
-			'label'       => 'Update Site Editor Template Part',
-			'description' => 'Updates a template part on a sub-site. All fields except site_id and template_part_id are optional — only include fields you want to change. Creates a custom override post if the part has not yet been customised.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'template_part_id' ),
+			'label'               => 'Update Site Editor Template Part',
+			'description'         => 'Updates a template part on a sub-site. All fields except site_id and template_part_id '
+				. 'are optional — only include fields you want to change. Creates a custom override post '
+				. 'if the part has not yet been customised.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'template_part_id' ) ),
 				'properties' => array(
-					'site_id'          => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'template_part_id' => array( 'type' => 'string', 'description' => 'The template part ID in theme-slug//slug format.' ),
-					'content'          => array( 'type' => 'string', 'description' => 'New block markup content.' ),
-					'title'            => array( 'type' => 'string', 'description' => 'Optional new title.' ),
-					'description'      => array( 'type' => 'string', 'description' => 'Optional new description for the template part.' ),
+					'site_id'          => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'template_part_id' => array(
+						'type'        => 'string',
+						'description' => 'The template part ID in theme-slug//slug format.',
+					),
+					'content'          => array(
+						'type'        => 'string',
+						'description' => 'New block markup content.',
+					),
+					'title'            => array(
+						'type'        => 'string',
+						'description' => 'Optional new title.',
+					),
+					'description'      => array(
+						'type'        => 'string',
+						'description' => 'Optional new description for the template part.',
+					),
 					'area'             => array(
 						'type'        => 'string',
 						'description' => 'Optional new area assignment. Must be one of: "header", "footer", "sidebar", "uncategorized".',
@@ -809,7 +1001,7 @@ function vip_mcp_register_ability_update_template_part(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -818,27 +1010,46 @@ function vip_mcp_register_ability_update_template_part(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$part_id = sanitize_text_field( $input['template_part_id'] );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => 0, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'post_id' => 0,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
 				// Valid template part areas.
 				$allowed_areas = array( 'header', 'footer', 'sidebar', 'uncategorized' );
 
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => "You do not have permission to edit template parts on site {$site_id}.",
+						);
+					}
+
 					$part = get_block_template( $part_id, 'wp_template_part' );
 
 					if ( ! $part ) {
-						$response = array( 'success' => false, 'post_id' => 0, 'message' => "Template part '{$part_id}' not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => "Template part '{$part_id}' not found on site {$site_id}.",
+						);
 					} else {
 						// Build changes — only include fields that were provided.
 						$changes = array();
@@ -863,7 +1074,11 @@ function vip_mcp_register_ability_update_template_part(): void {
 						if ( isset( $input['area'] ) ) {
 							$area = sanitize_text_field( $input['area'] );
 							if ( ! in_array( $area, $allowed_areas, true ) ) {
-								$response  = array( 'success' => false, 'post_id' => 0, 'message' => "Invalid area '{$area}'. Must be one of: " . implode( ', ', $allowed_areas ) . '.' );
+								$response  = array(
+									'success' => false,
+									'post_id' => 0,
+									'message' => "Invalid area '{$area}'. Must be one of: " . implode( ', ', $allowed_areas ) . '.',
+								);
 								$has_error = true;
 							} else {
 								$area_to_set = $area;
@@ -874,7 +1089,11 @@ function vip_mcp_register_ability_update_template_part(): void {
 						// Only proceed if validation passed.
 						if ( ! $has_error ) {
 							if ( empty( $changes ) && null === $area_to_set ) {
-								$response = array( 'success' => false, 'post_id' => 0, 'message' => 'No fields provided to update.' );
+								$response = array(
+									'success' => false,
+									'post_id' => 0,
+									'message' => 'No fields provided to update.',
+								);
 							} else {
 								if ( ! empty( $part->wp_id ) ) {
 									// Update existing custom override post.
@@ -891,9 +1110,7 @@ function vip_mcp_register_ability_update_template_part(): void {
 									$changes['post_name']   = $part->slug;
 
 									if ( ! isset( $changes['post_title'] ) ) {
-										$changes['post_title'] = is_string( $part->title )
-											? $part->title
-											: ( $part->title['rendered'] ?? $part->slug );
+										$changes['post_title'] = $part->title;
 									}
 
 									if ( ! isset( $changes['post_content'] ) ) {
@@ -918,7 +1135,11 @@ function vip_mcp_register_ability_update_template_part(): void {
 								}
 
 								if ( is_wp_error( $new_post_id ) ) {
-									$response = array( 'success' => false, 'post_id' => 0, 'message' => $new_post_id->get_error_message() );
+									$response = array(
+										'success' => false,
+										'post_id' => 0,
+										'message' => $new_post_id->get_error_message(),
+									);
 								} else {
 									// Set area via post meta if explicitly provided.
 									if ( null !== $area_to_set ) {
@@ -935,12 +1156,12 @@ function vip_mcp_register_ability_update_template_part(): void {
 						}
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -957,15 +1178,18 @@ function vip_mcp_register_ability_list_patterns(): void {
 	wp_register_ability(
 		'vip-multisite/list-patterns',
 		array(
-			'label'       => 'List Synced Patterns',
-			'description' => 'Returns all synced patterns (wp_block posts) on a specific sub-site, with optional filtering by category or sync status.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Synced Patterns',
+			'description'         => 'Returns all synced patterns (wp_block posts) on a specific sub-site, with optional filtering by category or sync status.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
-				'required'   => array( 'site_id' ),
+				'required'   => vip_mcp_required_with_site_id(),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'category' => array(
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'category'    => array(
 						'type'        => 'string',
 						'description' => 'Optional: filter by wp_pattern_category slug.',
 					),
@@ -974,15 +1198,24 @@ function vip_mcp_register_ability_list_patterns(): void {
 						'description' => 'Optional: filter by sync status. "synced" for fully synced, "unsynced" for standard patterns.',
 						'enum'        => array( 'synced', 'unsynced' ),
 					),
-					'search' => array(
+					'search'      => array(
 						'type'        => 'string',
 						'description' => 'Optional keyword to search pattern titles.',
 					),
-					'per_page' => array( 'type' => 'integer', 'default' => 50, 'minimum' => 1, 'maximum' => 100 ),
-					'page'     => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
+					'per_page'    => array(
+						'type'    => 'integer',
+						'default' => 50,
+						'minimum' => 1,
+						'maximum' => 100,
+					),
+					'page'        => array(
+						'type'    => 'integer',
+						'default' => 1,
+						'minimum' => 1,
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'     => array( 'type' => 'boolean' ),
@@ -993,15 +1226,21 @@ function vip_mcp_register_ability_list_patterns(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id  = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id  = vip_mcp_resolve_site_id( $input );
 				$per_page = min( max( (int) ( $input['per_page'] ?? 50 ), 1 ), 100 );
 				$page     = max( (int) ( $input['page'] ?? 1 ), 1 );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'patterns' => array(), 'total' => 0, 'total_pages' => 0, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'     => false,
+						'patterns'    => array(),
+						'total'       => 0,
+						'total_pages' => 0,
+						'message'     => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$query_args = array(
@@ -1056,8 +1295,18 @@ function vip_mcp_register_ability_list_patterns(): void {
 				$result = array();
 				$total  = 0;
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success'     => false,
+							'patterns'    => array(),
+							'total'       => 0,
+							'total_pages' => 0,
+							'message'     => "You do not have permission to list patterns on site {$site_id}.",
+						);
+					}
+
 					$query = new WP_Query( $query_args );
 					$total = (int) $query->found_posts;
 
@@ -1069,14 +1318,14 @@ function vip_mcp_register_ability_list_patterns(): void {
 							'post_id'     => (int) $post->ID,
 							'title'       => $post->post_title,
 							'slug'        => $post->post_name,
-							'sync_status' => $sync_status ?: 'synced',
+							'sync_status' => $sync_status ? $sync_status : 'synced',
 							'categories'  => is_wp_error( $categories ) ? array() : $categories,
 							'date'        => $post->post_date,
 							'modified'    => $post->post_modified,
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -1087,7 +1336,7 @@ function vip_mcp_register_ability_list_patterns(): void {
 					'message'     => sprintf( 'Retrieved %d pattern(s) from site %d.', count( $result ), $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1100,18 +1349,24 @@ function vip_mcp_register_ability_get_pattern(): void {
 	wp_register_ability(
 		'vip-multisite/get-pattern',
 		array(
-			'label'       => 'Get Synced Pattern',
-			'description' => 'Retrieves a synced pattern (wp_block) from a sub-site by its post ID, including full block markup content, categories, and sync status.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'post_id' ),
+			'label'               => 'Get Synced Pattern',
+			'description'         => 'Retrieves a synced pattern (wp_block) from a sub-site by its post ID, including full block markup content, categories, and sync status.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'post_id' ) ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'post_id' => array( 'type' => 'integer', 'description' => 'The post ID of the synced pattern.' ),
+					'site_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'post_id' => array(
+						'type'        => 'integer',
+						'description' => 'The post ID of the synced pattern.',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'     => array( 'type' => 'boolean' ),
@@ -1127,24 +1382,40 @@ function vip_mcp_register_ability_get_pattern(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$post_id = (int) $input['post_id'];
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'message' => "You do not have permission to manage patterns on site {$site_id}.",
+						);
+					}
+
 					$post = get_post( $post_id );
 
 					if ( ! $post || 'wp_block' !== $post->post_type ) {
-						$response = array( 'success' => false, 'message' => "Pattern (wp_block) with ID {$post_id} not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'message' => "Pattern (wp_block) with ID {$post_id} not found on site {$site_id}.",
+						);
 					} else {
 						$sync_status = get_post_meta( $post_id, 'wp_pattern_sync_status', true );
 						$categories  = wp_get_object_terms( $post_id, 'wp_pattern_category', array( 'fields' => 'slugs' ) );
@@ -1155,7 +1426,7 @@ function vip_mcp_register_ability_get_pattern(): void {
 							'title'       => $post->post_title,
 							'content'     => $post->post_content,
 							'slug'        => $post->post_name,
-							'sync_status' => $sync_status ?: 'synced',
+							'sync_status' => $sync_status ? $sync_status : 'synced',
 							'categories'  => is_wp_error( $categories ) ? array() : $categories,
 							'date'        => $post->post_date,
 							'modified'    => $post->post_modified,
@@ -1163,12 +1434,12 @@ function vip_mcp_register_ability_get_pattern(): void {
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1181,23 +1452,33 @@ function vip_mcp_register_ability_create_pattern(): void {
 	wp_register_ability(
 		'vip-multisite/create-pattern',
 		array(
-			'label'       => 'Create Synced Pattern',
-			'description' => 'Creates a new synced pattern (wp_block) on a sub-site. The pattern can be fully synced (edits propagate everywhere it is used) or unsynced (a standard reusable pattern).',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'title', 'content' ),
+			'label'               => 'Create Synced Pattern',
+			'description'         => 'Creates a new synced pattern (wp_block) on a site. The pattern can be fully synced '
+				. '(edits propagate everywhere it is used) or unsynced (a standard reusable pattern).',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'title', 'content' ) ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'title'   => array( 'type' => 'string', 'description' => 'The title of the pattern.' ),
-					'content' => array( 'type' => 'string', 'description' => 'Block markup content for the pattern.' ),
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'title'       => array(
+						'type'        => 'string',
+						'description' => 'The title of the pattern.',
+					),
+					'content'     => array(
+						'type'        => 'string',
+						'description' => 'Block markup content for the pattern.',
+					),
 					'sync_status' => array(
 						'type'        => 'string',
 						'description' => 'Sync behaviour. "synced" (default) means changes propagate to all instances; "unsynced" makes it a standard pattern.',
 						'enum'        => array( 'synced', 'unsynced' ),
 						'default'     => 'synced',
 					),
-					'categories' => array(
+					'categories'  => array(
 						'type'        => 'array',
 						'description' => 'Optional array of wp_pattern_category slugs to assign (max 20). Categories are created if they do not exist.',
 						'items'       => array( 'type' => 'string' ),
@@ -1205,7 +1486,7 @@ function vip_mcp_register_ability_create_pattern(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -1214,28 +1495,51 @@ function vip_mcp_register_ability_create_pattern(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => 0, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'post_id' => 0,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'post_id' => 0, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'post_id' => 0,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
-					$post_id = wp_insert_post( array(
-						'post_type'    => 'wp_block',
-						'post_title'   => wp_strip_all_tags( $input['title'] ),
-						'post_content' => vip_mcp_sanitize_content( $input['content'] ),
-						'post_status'  => 'publish',
-					), true );
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => "You do not have permission to create patterns on site {$site_id}.",
+						);
+					}
+
+					$post_id = wp_insert_post(
+						array(
+							'post_type'    => 'wp_block',
+							'post_title'   => wp_strip_all_tags( $input['title'] ),
+							'post_content' => vip_mcp_sanitize_content( $input['content'] ),
+							'post_status'  => 'publish',
+						),
+						true
+					);
 
 					if ( is_wp_error( $post_id ) ) {
-						$response = array( 'success' => false, 'post_id' => 0, 'message' => $post_id->get_error_message() );
+						$response = array(
+							'success' => false,
+							'post_id' => 0,
+							'message' => $post_id->get_error_message(),
+						);
 					} else {
 						// Set sync status meta.
 						$sync = ( $input['sync_status'] ?? 'synced' ) === 'unsynced' ? 'unsynced' : '';
@@ -1256,12 +1560,12 @@ function vip_mcp_register_ability_create_pattern(): void {
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1274,23 +1578,36 @@ function vip_mcp_register_ability_update_pattern(): void {
 	wp_register_ability(
 		'vip-multisite/update-pattern',
 		array(
-			'label'       => 'Update Synced Pattern',
-			'description' => 'Updates an existing synced pattern (wp_block) on a sub-site. You can change its title, content, sync status, or categories. Only include fields you want to change.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'post_id' ),
+			'label'               => 'Update Synced Pattern',
+			'description'         => 'Updates an existing synced pattern (wp_block) on a site. You can change its title, '
+				. 'content, sync status, or categories. Only include fields you want to change.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'post_id' ) ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'post_id' => array( 'type' => 'integer', 'description' => 'The post ID of the pattern to update.' ),
-					'title'   => array( 'type' => 'string', 'description' => 'New title.' ),
-					'content' => array( 'type' => 'string', 'description' => 'New block markup content.' ),
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'post_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The post ID of the pattern to update.',
+					),
+					'title'       => array(
+						'type'        => 'string',
+						'description' => 'New title.',
+					),
+					'content'     => array(
+						'type'        => 'string',
+						'description' => 'New block markup content.',
+					),
 					'sync_status' => array(
 						'type'        => 'string',
 						'description' => 'New sync status: "synced" or "unsynced".',
 						'enum'        => array( 'synced', 'unsynced' ),
 					),
-					'categories' => array(
+					'categories'  => array(
 						'type'        => 'array',
 						'description' => 'Replace all categories with this list of wp_pattern_category slugs (max 20). Missing categories will be created.',
 						'items'       => array( 'type' => 'string' ),
@@ -1298,7 +1615,7 @@ function vip_mcp_register_ability_update_pattern(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -1307,24 +1624,44 @@ function vip_mcp_register_ability_update_pattern(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_theme_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$post_id = (int) $input['post_id'];
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => $post_id, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'post_id' => $post_id,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$response = array( 'success' => false, 'post_id' => $post_id, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'post_id' => $post_id,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'edit_theme_options' ) ) {
+						return array(
+							'success' => false,
+							'post_id' => $post_id,
+							'message' => "You do not have permission to edit patterns on site {$site_id}.",
+						);
+					}
+
 					$post = get_post( $post_id );
 
 					if ( ! $post || 'wp_block' !== $post->post_type ) {
-						$response = array( 'success' => false, 'post_id' => $post_id, 'message' => "Pattern (wp_block) with ID {$post_id} not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'post_id' => $post_id,
+							'message' => "Pattern (wp_block) with ID {$post_id} not found on site {$site_id}.",
+						);
 					} else {
 						$postarr = array( 'ID' => $post_id );
 						$updated = array();
@@ -1342,7 +1679,11 @@ function vip_mcp_register_ability_update_pattern(): void {
 						if ( count( $postarr ) > 1 ) {
 							$result = wp_update_post( $postarr, true );
 							if ( is_wp_error( $result ) ) {
-								$response = array( 'success' => false, 'post_id' => $post_id, 'message' => $result->get_error_message() );
+								$response = array(
+									'success' => false,
+									'post_id' => $post_id,
+									'message' => $result->get_error_message(),
+								);
 								$update_failed = true;
 							}
 						}
@@ -1363,7 +1704,11 @@ function vip_mcp_register_ability_update_pattern(): void {
 							}
 
 							if ( empty( $updated ) ) {
-								$response = array( 'success' => false, 'post_id' => $post_id, 'message' => 'No fields provided to update.' );
+								$response = array(
+									'success' => false,
+									'post_id' => $post_id,
+									'message' => 'No fields provided to update.',
+								);
 							} else {
 								$response = array(
 									'success' => true,
@@ -1374,12 +1719,12 @@ function vip_mcp_register_ability_update_pattern(): void {
 						}
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }

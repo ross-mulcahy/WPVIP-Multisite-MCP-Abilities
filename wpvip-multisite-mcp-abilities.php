@@ -1,11 +1,11 @@
 <?php
 /**
- * Plugin Name: WPVIP Multisite MCP Abilities
+ * Plugin Name: WPVIP MCP Abilities
  * Plugin URI:  https://wpvip.com
- * Description: Registers WordPress Multisite network management abilities for MCP/AI access.
- *              Enables creating sites, activating themes, managing users, and listing network
- *              resources — all accessible via MCP-connected AI agents.
- * Version:     1.3.0
+ * Description: Registers WordPress MCP abilities for managing content, Site Editor, options,
+ *              and (on Multisite) network-level resources via MCP-connected AI agents.
+ *              Works on both single-site and Multisite installations.
+ * Version:     1.5.0
  * Author:      Ross Mulcahy
  * Requires PHP: 8.0
  * Requires WP:  6.9
@@ -20,6 +20,79 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// =========================================================================
+// MULTISITE COMPATIBILITY HELPERS
+//
+// These thin wrappers allow site-level abilities to work on both single-site
+// and Multisite installations. On single-site the blog-switching and site
+// validation functions are no-ops; on Multisite they delegate to core.
+// =========================================================================
+
+/**
+ * Resolve the target site ID from ability input.
+ *
+ * On Multisite the caller is expected to supply site_id. On single-site
+ * the parameter is optional and defaults to the current (only) blog.
+ *
+ * @param array<string,mixed> $input Ability input array.
+ */
+function vip_mcp_resolve_site_id( array $input ): int {
+	if ( isset( $input['site_id'] ) ) {
+		return (int) $input['site_id'];
+	}
+	return get_current_blog_id();
+}
+
+/**
+ * Validate that a site ID refers to an existing site.
+ *
+ * On single-site this always returns true — there is only one blog.
+ *
+ * @param int $site_id Site ID to validate.
+ */
+function vip_mcp_validate_site( int $site_id ): bool {
+	if ( ! is_multisite() ) {
+		return true;
+	}
+	return (bool) get_site( $site_id );
+}
+
+/**
+ * Switch to the given blog context (Multisite only).
+ *
+ * @param int $site_id Site ID to switch to.
+ */
+function vip_mcp_switch_to_site( int $site_id ): void {
+	if ( is_multisite() ) {
+		vip_mcp_switch_to_site( $site_id );
+	}
+}
+
+/**
+ * Restore the previous blog context (Multisite only).
+ */
+function vip_mcp_restore_site(): void {
+	if ( is_multisite() ) {
+		vip_mcp_restore_site();
+	}
+}
+
+/**
+ * Build the `required` array for an ability's input_schema.
+ *
+ * On Multisite, `site_id` is prepended (it must be explicit).
+ * On single-site it is omitted (defaults to the current blog).
+ *
+ * @param string[] $fields Required field names.
+ * @return string[] Required fields with site_id prepended on Multisite.
+ */
+function vip_mcp_required_with_site_id( array $fields = array() ): array {
+	if ( is_multisite() ) {
+		array_unshift( $fields, 'site_id' );
+	}
+	return $fields;
+}
+
 require_once __DIR__ . '/wpvip-mcp-site-editor-abilities.php';
 
 // Core wp_register_ability_category() requires doing_action('wp_abilities_api_categories_init').
@@ -31,21 +104,28 @@ add_action( 'wp_abilities_api_categories_init', 'vip_mcp_register_multisite_cate
 add_action( 'wp_abilities_api_init', 'vip_mcp_register_multisite_abilities' );
 
 /**
- * Register the VIP Multisite ability category.
+ * Register the VIP ability category.
  * Must be called on wp_abilities_api_categories_init — core enforces this with doing_action() check.
  */
 function vip_mcp_register_multisite_category(): void {
 	wp_register_ability_category(
 		'vip-multisite',
 		array(
-			'label'       => 'VIP Multisite',
-			'description' => 'WordPress multisite network management abilities.',
+			'label'       => is_multisite() ? 'VIP Multisite' : 'VIP Site Management',
+			'description' => is_multisite()
+				? 'WordPress multisite network management abilities.'
+				: 'WordPress site management abilities.',
 		)
 	);
 }
 
 /**
- * Register all multisite management abilities.
+ * Register all management abilities.
+ *
+ * Site-level abilities (content, options) register on both single-site and
+ * Multisite installations. Network-level abilities (sites, users, themes,
+ * plugins) only register when is_multisite() is true.
+ *
  * Must be called on wp_abilities_api_init — core enforces this with doing_action() check.
  */
 function vip_mcp_register_multisite_abilities(): void {
@@ -53,6 +133,24 @@ function vip_mcp_register_multisite_abilities(): void {
 		return;
 	}
 
+	// ------------------------------------------------------------------
+	// Site-level abilities — work on both single-site and Multisite.
+	// ------------------------------------------------------------------
+
+	// Content management abilities.
+	vip_mcp_register_ability_list_post_types();
+	vip_mcp_register_ability_create_post();
+	vip_mcp_register_ability_get_post();
+	vip_mcp_register_ability_update_post();
+	vip_mcp_register_ability_list_posts();
+
+	// Site options abilities.
+	vip_mcp_register_ability_get_site_option();
+	vip_mcp_register_ability_update_site_option();
+
+	// ------------------------------------------------------------------
+	// Network-level abilities — Multisite only.
+	// ------------------------------------------------------------------
 	if ( ! is_multisite() ) {
 		return;
 	}
@@ -67,16 +165,6 @@ function vip_mcp_register_multisite_abilities(): void {
 	vip_mcp_register_ability_add_user_to_site();
 	vip_mcp_register_ability_create_network_user();
 	vip_mcp_register_ability_list_network_plugins();
-
-	// Content management abilities.
-	vip_mcp_register_ability_create_post();
-	vip_mcp_register_ability_get_post();
-	vip_mcp_register_ability_update_post();
-	vip_mcp_register_ability_list_posts();
-
-	// Site options abilities.
-	vip_mcp_register_ability_get_site_option();
-	vip_mcp_register_ability_update_site_option();
 }
 
 
@@ -91,38 +179,39 @@ function vip_mcp_register_ability_list_sites(): void {
 	wp_register_ability(
 		'vip-multisite/list-sites',
 		array(
-			'label'       => 'List Network Sites',
-			'description' => 'Returns all sites registered in the WordPress multisite network.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Network Sites',
+			'description'         => 'Returns all sites registered in the WordPress multisite network.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'properties' => array(
-					'per_page' => array(
+					'per_page'        => array(
 						'type'        => 'integer',
 						'description' => 'Number of sites to return per page (default 50, max 100).',
 						'default'     => 50,
 						'minimum'     => 1,
 						'maximum'     => 100,
 					),
-					'page' => array(
+					'page'            => array(
 						'type'        => 'integer',
 						'description' => 'Page number for pagination (default 1).',
 						'default'     => 1,
 						'minimum'     => 1,
 					),
-					'search' => array(
+					'search'          => array(
 						'type'        => 'string',
 						'description' => 'Optional search term to filter sites by domain or path.',
 					),
 					'include_options' => array(
 						'type'        => 'boolean',
-						'description' => 'Include blogname, description, and active_theme in results. Each requires a per-site DB query. Set false for lightweight listing on large networks. Default true.',
+						'description' => 'Include blogname, description, and active_theme in results. '
+						. 'Each requires a per-site DB query. Set false for lightweight listing on large networks. Default true.',
 						'default'     => true,
 					),
 				),
 			),
-			'output_schema' => array(
-				'type'  => 'object',
+			'output_schema'       => array(
+				'type'       => 'object',
 				'properties' => array(
 					'sites'       => array( 'type' => 'array' ),
 					'total'       => array( 'type' => 'integer' ),
@@ -132,7 +221,7 @@ function vip_mcp_register_ability_list_sites(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$per_page = min( max( (int) ( $input['per_page'] ?? 50 ), 1 ), 100 );
 				$page     = max( (int) ( $input['page'] ?? 1 ), 1 );
 				$search   = $input['search'] ?? '';
@@ -140,7 +229,6 @@ function vip_mcp_register_ability_list_sites(): void {
 				$args = array(
 					'number' => $per_page,
 					'offset' => ( $page - 1 ) * $per_page,
-					'public' => null,
 				);
 
 				if ( $search ) {
@@ -148,7 +236,15 @@ function vip_mcp_register_ability_list_sites(): void {
 				}
 
 				$sites = get_sites( $args );
-				$total = get_sites( array_merge( $args, array( 'number' => 0, 'count' => true ) ) );
+				$total = get_sites(
+					array_merge(
+						$args,
+						array(
+							'number' => 0,
+							'count'  => true,
+						)
+					)
+				);
 
 				// Note: get_blog_option() issues one query per site per key — WordPress has no
 				// bulk API for cross-blog options. Pass include_options=false for lightweight
@@ -161,7 +257,7 @@ function vip_mcp_register_ability_list_sites(): void {
 						'id'           => (int) $site->blog_id,
 						'domain'       => $site->domain,
 						'path'         => $site->path,
-						'url'          => get_site_url( $site->blog_id ),
+						'url'          => get_site_url( (int) $site->blog_id ),
 						'registered'   => $site->registered,
 						'last_updated' => $site->last_updated,
 						'public'       => (bool) $site->public,
@@ -171,9 +267,9 @@ function vip_mcp_register_ability_list_sites(): void {
 					);
 
 					if ( $include_options ) {
-						$row['name']         = get_blog_option( $site->blog_id, 'blogname' );
-						$row['description']  = get_blog_option( $site->blog_id, 'blogdescription' );
-						$row['active_theme'] = get_blog_option( $site->blog_id, 'stylesheet' );
+						$row['name']         = get_blog_option( (int) $site->blog_id, 'blogname' );
+						$row['description']  = get_blog_option( (int) $site->blog_id, 'blogdescription' );
+						$row['active_theme'] = get_blog_option( (int) $site->blog_id, 'stylesheet' );
 					}
 
 					$result[] = $row;
@@ -185,7 +281,7 @@ function vip_mcp_register_ability_list_sites(): void {
 					'total_pages' => (int) ceil( $total / $per_page ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -197,26 +293,26 @@ function vip_mcp_register_ability_create_site(): void {
 	wp_register_ability(
 		'vip-multisite/create-site',
 		array(
-			'label'       => 'Create Network Site',
-			'description' => 'Creates a new site in the WordPress multisite network.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Create Network Site',
+			'description'         => 'Creates a new site in the WordPress multisite network.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'domain', 'title', 'admin_email' ),
 				'properties' => array(
-					'domain' => array(
+					'domain'                 => array(
 						'type'        => 'string',
 						'description' => 'The slug for the new site (e.g. "newsroom"). Used as subdomain or subdirectory depending on network config.',
 					),
-					'title' => array(
+					'title'                  => array(
 						'type'        => 'string',
 						'description' => 'The display name / title of the new site.',
 					),
-					'admin_email' => array(
+					'admin_email'            => array(
 						'type'        => 'string',
 						'description' => 'Email address of the site administrator. Must match an existing network user unless create_user_if_missing is set to true.',
 					),
-					'public' => array(
+					'public'                 => array(
 						'type'        => 'boolean',
 						'description' => 'Whether the site is publicly visible (default true).',
 						'default'     => true,
@@ -228,25 +324,30 @@ function vip_mcp_register_ability_create_site(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
-					'success'  => array( 'type' => 'boolean' ),
-					'site_id'  => array( 'type' => 'integer' ),
-					'url'      => array( 'type' => 'string' ),
-					'message'  => array( 'type' => 'string' ),
+					'success' => array( 'type' => 'boolean' ),
+					'site_id' => array( 'type' => 'integer' ),
+					'url'     => array( 'type' => 'string' ),
+					'message' => array( 'type' => 'string' ),
 				),
 			),
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$network = get_network();
 				$base    = $network->domain;
 				$slug    = sanitize_title( $input['domain'] );
 
 				if ( empty( $slug ) ) {
-					return array( 'success' => false, 'site_id' => 0, 'url' => '', 'message' => "Invalid site slug — the domain value produced an empty slug after sanitization." );
+					return array(
+						'success' => false,
+						'site_id' => 0,
+						'url'     => '',
+						'message' => 'Invalid site slug — the domain value produced an empty slug after sanitization.',
+					);
 				}
 
 				if ( is_subdomain_install() ) {
@@ -259,7 +360,12 @@ function vip_mcp_register_ability_create_site(): void {
 
 				$admin_email = sanitize_email( $input['admin_email'] );
 				if ( empty( $admin_email ) ) {
-					return array( 'success' => false, 'site_id' => 0, 'url' => '', 'message' => 'Invalid email address.' );
+					return array(
+						'success' => false,
+						'site_id' => 0,
+						'url'     => '',
+						'message' => 'Invalid email address.',
+					);
 				}
 
 				$user = get_user_by( 'email', $admin_email );
@@ -281,11 +387,21 @@ function vip_mcp_register_ability_create_site(): void {
 						$suffix++;
 					}
 					if ( username_exists( $username ) ) {
-						return array( 'success' => false, 'site_id' => 0, 'url' => '', 'message' => "Could not generate a unique username for '{$admin_email}'. Too many collisions." );
+						return array(
+							'success' => false,
+							'site_id' => 0,
+							'url'     => '',
+							'message' => "Could not generate a unique username for '{$admin_email}'. Too many collisions.",
+						);
 					}
 					$user_id = wpmu_create_user( $username, wp_generate_password(), $admin_email );
 					if ( ! $user_id ) {
-						return array( 'success' => false, 'site_id' => 0, 'url' => '', 'message' => "Failed to create user for '{$admin_email}'." );
+						return array(
+							'success' => false,
+							'site_id' => 0,
+							'url'     => '',
+							'message' => "Failed to create user for '{$admin_email}'.",
+						);
 					}
 					wp_new_user_notification( $user_id, null, 'user' );
 				} else {
@@ -302,7 +418,12 @@ function vip_mcp_register_ability_create_site(): void {
 				);
 
 				if ( is_wp_error( $site_id ) ) {
-					return array( 'success' => false, 'site_id' => 0, 'url' => '', 'message' => $site_id->get_error_message() );
+					return array(
+						'success' => false,
+						'site_id' => 0,
+						'url'     => '',
+						'message' => $site_id->get_error_message(),
+					);
 				}
 
 				return array(
@@ -312,7 +433,7 @@ function vip_mcp_register_ability_create_site(): void {
 					'message' => sprintf( 'Site "%s" created successfully (ID: %d).', $input['title'], $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -324,10 +445,10 @@ function vip_mcp_register_ability_get_site(): void {
 	wp_register_ability(
 		'vip-multisite/get-site',
 		array(
-			'label'       => 'Get Site Details',
-			'description' => 'Returns detailed information about a specific site in the network.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Get Site Details',
+			'description'         => 'Returns detailed information about a specific site in the network.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'site_id' ),
 				'properties' => array(
@@ -337,7 +458,7 @@ function vip_mcp_register_ability_get_site(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'id'           => array( 'type' => 'integer' ),
@@ -363,16 +484,32 @@ function vip_mcp_register_ability_get_site(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$site_id = (int) $input['site_id'];
 				$site    = get_site( $site_id );
 
 				if ( ! $site ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
-				$users     = get_users( array( 'blog_id' => $site_id, 'fields' => array( 'ID', 'user_login', 'user_email' ), 'number' => 20 ) );
-				$user_list = array_map( static fn( $u ) => array( 'id' => $u->ID, 'username' => $u->user_login, 'email' => $u->user_email ), $users );
+				$users     = get_users(
+					array(
+						'blog_id' => $site_id,
+						'fields'  => array( 'ID', 'user_login', 'user_email' ),
+						'number'  => 20,
+					)
+				);
+				$user_list = array_map(
+					static fn( $u ) => array(
+						'id'       => $u->ID,
+						'username' => $u->user_login,
+						'email'    => $u->user_email,
+					),
+					$users
+				);
 
 				return array(
 					'success'      => true,
@@ -394,7 +531,7 @@ function vip_mcp_register_ability_get_site(): void {
 					'users'        => $user_list,
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -406,21 +543,36 @@ function vip_mcp_register_ability_update_site(): void {
 	wp_register_ability(
 		'vip-multisite/update-site',
 		array(
-			'label'       => 'Update Site Settings',
-			'description' => 'Updates settings (name, description, public visibility) for a network site.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Update Site Settings',
+			'description'         => 'Updates settings (name, description, public visibility) for a network site.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'site_id' ),
 				'properties' => array(
-					'site_id'     => array( 'type' => 'integer', 'description' => 'The ID of the site to update.' ),
-					'name'        => array( 'type' => 'string',  'description' => 'New display name for the site.' ),
-					'description' => array( 'type' => 'string',  'description' => 'New tagline / description.' ),
-					'public'      => array( 'type' => 'boolean', 'description' => 'Set whether the site is publicly visible.' ),
-					'admin_email' => array( 'type' => 'string',  'description' => 'New admin email address.' ),
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the site to update.',
+					),
+					'name'        => array(
+						'type'        => 'string',
+						'description' => 'New display name for the site.',
+					),
+					'description' => array(
+						'type'        => 'string',
+						'description' => 'New tagline / description.',
+					),
+					'public'      => array(
+						'type'        => 'boolean',
+						'description' => 'Set whether the site is publicly visible.',
+					),
+					'admin_email' => array(
+						'type'        => 'string',
+						'description' => 'New admin email address.',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -430,28 +582,40 @@ function vip_mcp_register_ability_update_site(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$site_id = (int) $input['site_id'];
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
 				// --- Validation phase — validate all inputs before writing anything. ---
 
 				if ( ! isset( $input['name'] ) && ! isset( $input['description'] ) &&
-				     ! isset( $input['public'] ) && ! isset( $input['admin_email'] ) ) {
-					return array( 'success' => false, 'message' => 'No fields provided to update.' );
+					! isset( $input['public'] ) && ! isset( $input['admin_email'] ) ) {
+					return array(
+						'success' => false,
+						'message' => 'No fields provided to update.',
+					);
 				}
 
 				$validated_email = null;
 				if ( isset( $input['admin_email'] ) ) {
 					$validated_email = sanitize_email( $input['admin_email'] );
 					if ( empty( $validated_email ) ) {
-						return array( 'success' => false, 'message' => 'Invalid admin email address.' );
+						return array(
+							'success' => false,
+							'message' => 'Invalid admin email address.',
+						);
 					}
 					if ( ! get_user_by( 'email', $validated_email ) ) {
-						return array( 'success' => false, 'message' => "Admin email must belong to an existing network user. No user found for '{$validated_email}'." );
+						return array(
+							'success' => false,
+							'message' => "Admin email must belong to an existing network user. No user found for '{$validated_email}'.",
+						);
 					}
 				}
 
@@ -469,7 +633,7 @@ function vip_mcp_register_ability_update_site(): void {
 				}
 				if ( isset( $input['public'] ) ) {
 					update_blog_option( $site_id, 'blog_public', (int) $input['public'] );
-					update_blog_status( $site_id, 'public', (int) $input['public'] );
+					update_blog_status( $site_id, 'public', (string) (int) $input['public'] );
 					$updated[] = 'public';
 				}
 				if ( null !== $validated_email ) {
@@ -482,7 +646,7 @@ function vip_mcp_register_ability_update_site(): void {
 					'message' => sprintf( 'Updated fields for site %d: %s.', $site_id, implode( ', ', $updated ) ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -494,10 +658,10 @@ function vip_mcp_register_ability_list_themes(): void {
 	wp_register_ability(
 		'vip-multisite/list-themes',
 		array(
-			'label'       => 'List Network Themes',
-			'description' => 'Returns all themes installed on the network, including which are network-enabled.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Network Themes',
+			'description'         => 'Returns all themes installed on the network, including which are network-enabled.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'properties' => array(
 					'site_id' => array(
@@ -506,8 +670,8 @@ function vip_mcp_register_ability_list_themes(): void {
 					),
 				),
 			),
-			'output_schema' => array(
-				'type'  => 'object',
+			'output_schema'       => array(
+				'type'       => 'object',
 				'properties' => array(
 					'themes' => array( 'type' => 'array' ),
 				),
@@ -515,7 +679,7 @@ function vip_mcp_register_ability_list_themes(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$all_themes     = wp_get_themes();
 				$allowed_themes = get_site_option( 'allowedthemes', array() );
 				$site_id        = isset( $input['site_id'] ) ? (int) $input['site_id'] : null;
@@ -536,7 +700,7 @@ function vip_mcp_register_ability_list_themes(): void {
 
 				return array( 'themes' => $result );
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -548,19 +712,29 @@ function vip_mcp_register_ability_activate_theme(): void {
 	wp_register_ability(
 		'vip-multisite/activate-theme',
 		array(
-			'label'       => 'Activate Theme on Site',
-			'description' => 'Activates a theme on a specific network site, network-enabling it first if necessary.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Activate Theme on Site',
+			'description'         => 'Activates a theme on a specific network site, network-enabling it first if necessary.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'site_id', 'theme_slug' ),
 				'properties' => array(
-					'site_id'        => array( 'type' => 'integer', 'description' => 'The ID of the site to activate the theme on.' ),
-					'theme_slug'     => array( 'type' => 'string',  'description' => 'The theme stylesheet slug (directory name) to activate.' ),
-					'network_enable' => array( 'type' => 'boolean', 'description' => 'Whether to also network-enable the theme if not already (default true).', 'default' => true ),
+					'site_id'        => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the site to activate the theme on.',
+					),
+					'theme_slug'     => array(
+						'type'        => 'string',
+						'description' => 'The theme stylesheet slug (directory name) to activate.',
+					),
+					'network_enable' => array(
+						'type'        => 'boolean',
+						'description' => 'Whether to also network-enable the theme if not already (default true).',
+						'default'     => true,
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'    => array( 'type' => 'boolean' ),
@@ -572,18 +746,28 @@ function vip_mcp_register_ability_activate_theme(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$site_id    = (int) $input['site_id'];
 				$theme_slug = sanitize_text_field( $input['theme_slug'] );
 
 				$site = get_site( $site_id );
 				if ( ! $site ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} does not exist.", 'theme_name' => '', 'site_url' => '' );
+					return array(
+						'success'    => false,
+						'message'    => "Site ID {$site_id} does not exist.",
+						'theme_name' => '',
+						'site_url'   => '',
+					);
 				}
 
 				$theme = wp_get_theme( $theme_slug );
 				if ( ! $theme->exists() ) {
-					return array( 'success' => false, 'message' => "Theme '{$theme_slug}' is not installed.", 'theme_name' => '', 'site_url' => get_site_url( $site_id ) );
+					return array(
+						'success'    => false,
+						'message'    => "Theme '{$theme_slug}' is not installed.",
+						'theme_name' => '',
+						'site_url'   => get_site_url( $site_id ),
+					);
 				}
 
 				if ( $input['network_enable'] ?? true ) {
@@ -594,11 +778,11 @@ function vip_mcp_register_ability_activate_theme(): void {
 					}
 				}
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
 					switch_theme( $theme_slug ); // Handles template/stylesheet correctly, fires switch_theme and after_switch_theme hooks.
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -608,7 +792,7 @@ function vip_mcp_register_ability_activate_theme(): void {
 					'site_url'   => get_site_url( $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -620,20 +804,35 @@ function vip_mcp_register_ability_list_network_users(): void {
 	wp_register_ability(
 		'vip-multisite/list-network-users',
 		array(
-			'label'       => 'List Network Users',
-			'description' => 'Returns all users registered in the WordPress multisite network.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Network Users',
+			'description'         => 'Returns all users registered in the WordPress multisite network.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'properties' => array(
-					'per_page' => array( 'type' => 'integer', 'default' => 50, 'maximum' => 100, 'minimum' => 1 ),
-					'page'     => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
-					'search'   => array( 'type' => 'string',  'description' => 'Search by username, email, or display name.' ),
-					'site_id'  => array( 'type' => 'integer', 'description' => 'Filter to users belonging to a specific site.' ),
+					'per_page' => array(
+						'type'    => 'integer',
+						'default' => 50,
+						'maximum' => 100,
+						'minimum' => 1,
+					),
+					'page'     => array(
+						'type'    => 'integer',
+						'default' => 1,
+						'minimum' => 1,
+					),
+					'search'   => array(
+						'type'        => 'string',
+						'description' => 'Search by username, email, or display name.',
+					),
+					'site_id'  => array(
+						'type'        => 'integer',
+						'description' => 'Filter to users belonging to a specific site.',
+					),
 				),
 			),
-			'output_schema' => array(
-				'type' => 'object',
+			'output_schema'       => array(
+				'type'       => 'object',
 				'properties' => array(
 					'users'       => array( 'type' => 'array' ),
 					'total'       => array( 'type' => 'integer' ),
@@ -643,7 +842,7 @@ function vip_mcp_register_ability_list_network_users(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$per_page = min( max( (int) ( $input['per_page'] ?? 50 ), 1 ), 100 );
 				$page     = max( (int) ( $input['page'] ?? 1 ), 1 );
 
@@ -682,7 +881,7 @@ function vip_mcp_register_ability_list_network_users(): void {
 					'total_pages' => (int) ceil( $total / $per_page ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -694,15 +893,21 @@ function vip_mcp_register_ability_add_user_to_site(): void {
 	wp_register_ability(
 		'vip-multisite/add-user-to-site',
 		array(
-			'label'       => 'Add User to Site',
-			'description' => 'Adds an existing network user to a specific site with a given role.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Add User to Site',
+			'description'         => 'Adds an existing network user to a specific site with a given role.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'site_id', 'user_id', 'role' ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the site.' ),
-					'user_id' => array( 'type' => 'integer', 'description' => 'The ID of the user to add.' ),
+					'site_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the site.',
+					),
+					'user_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the user to add.',
+					),
 					'role'    => array(
 						'type'        => 'string',
 						'description' => 'The role to assign.',
@@ -710,7 +915,7 @@ function vip_mcp_register_ability_add_user_to_site(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -720,28 +925,40 @@ function vip_mcp_register_ability_add_user_to_site(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$site_id = (int) $input['site_id'];
 				$user_id = (int) $input['user_id'];
 				$role    = sanitize_text_field( $input['role'] );
 
 				$allowed_roles = array( 'administrator', 'editor', 'author', 'contributor', 'subscriber' );
 				if ( ! in_array( $role, $allowed_roles, true ) ) {
-					return array( 'success' => false, 'message' => "Role '{$role}' is not allowed. Must be one of: " . implode( ', ', $allowed_roles ) . '.' );
+					return array(
+						'success' => false,
+						'message' => "Role '{$role}' is not allowed. Must be one of: " . implode( ', ', $allowed_roles ) . '.',
+					);
 				}
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 				$user = get_user_by( 'id', $user_id );
 				if ( ! $user ) {
-					return array( 'success' => false, 'message' => "User ID {$user_id} not found." );
+					return array(
+						'success' => false,
+						'message' => "User ID {$user_id} not found.",
+					);
 				}
 
 				$result = add_user_to_blog( $site_id, $user_id, $role );
 
 				if ( is_wp_error( $result ) ) {
-					return array( 'success' => false, 'message' => $result->get_error_message() );
+					return array(
+						'success' => false,
+						'message' => $result->get_error_message(),
+					);
 				}
 
 				return array(
@@ -749,7 +966,7 @@ function vip_mcp_register_ability_add_user_to_site(): void {
 					'message' => sprintf( 'User "%s" added to site "%s" with role "%s".', $user->user_login, get_blog_option( $site_id, 'blogname' ), $role ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -761,21 +978,37 @@ function vip_mcp_register_ability_create_network_user(): void {
 	wp_register_ability(
 		'vip-multisite/create-network-user',
 		array(
-			'label'       => 'Create Network User',
-			'description' => 'Creates a new user account on the WordPress multisite network.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'Create Network User',
+			'description'         => 'Creates a new user account on the WordPress multisite network.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'required'   => array( 'username', 'email' ),
 				'properties' => array(
-					'username'          => array( 'type' => 'string', 'description' => 'Login username.' ),
-					'email'             => array( 'type' => 'string', 'description' => 'Email address.' ),
-					'first_name'        => array( 'type' => 'string', 'description' => 'Optional first name.' ),
-					'last_name'         => array( 'type' => 'string', 'description' => 'Optional last name.' ),
-					'send_notification' => array( 'type' => 'boolean', 'description' => 'Send welcome email (default true).', 'default' => true ),
+					'username'          => array(
+						'type'        => 'string',
+						'description' => 'Login username.',
+					),
+					'email'             => array(
+						'type'        => 'string',
+						'description' => 'Email address.',
+					),
+					'first_name'        => array(
+						'type'        => 'string',
+						'description' => 'Optional first name.',
+					),
+					'last_name'         => array(
+						'type'        => 'string',
+						'description' => 'Optional last name.',
+					),
+					'send_notification' => array(
+						'type'        => 'boolean',
+						'description' => 'Send welcome email (default true).',
+						'default'     => true,
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -786,29 +1019,49 @@ function vip_mcp_register_ability_create_network_user(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			'execute_callback'    => static function ( array $input ): array {
 				$username = sanitize_user( $input['username'], true );
 				$email    = sanitize_email( $input['email'] );
 
 				if ( empty( $username ) ) {
-					return array( 'success' => false, 'user_id' => 0, 'message' => 'Invalid username after sanitization.' );
+					return array(
+						'success' => false,
+						'user_id' => 0,
+						'message' => 'Invalid username after sanitization.',
+					);
 				}
 				if ( empty( $email ) ) {
-					return array( 'success' => false, 'user_id' => 0, 'message' => 'Invalid email address.' );
+					return array(
+						'success' => false,
+						'user_id' => 0,
+						'message' => 'Invalid email address.',
+					);
 				}
 
 				if ( username_exists( $username ) ) {
-					return array( 'success' => false, 'user_id' => 0, 'message' => "Username '{$username}' is already taken." );
+					return array(
+						'success' => false,
+						'user_id' => 0,
+						'message' => "Username '{$username}' is already taken.",
+					);
 				}
 				if ( email_exists( $email ) ) {
-					return array( 'success' => false, 'user_id' => 0, 'message' => "Email '{$email}' is already registered." );
+					return array(
+						'success' => false,
+						'user_id' => 0,
+						'message' => "Email '{$email}' is already registered.",
+					);
 				}
 
 				$password = wp_generate_password( 24 );
 				$user_id  = wpmu_create_user( $username, $password, $email );
 
 				if ( ! $user_id ) {
-					return array( 'success' => false, 'user_id' => 0, 'message' => "Failed to create user '{$username}'." );
+					return array(
+						'success' => false,
+						'user_id' => 0,
+						'message' => "Failed to create user '{$username}'.",
+					);
 				}
 
 				$update = array( 'ID' => $user_id );
@@ -832,7 +1085,7 @@ function vip_mcp_register_ability_create_network_user(): void {
 					'message' => "User '{$username}' created successfully (ID: {$user_id}).",
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -844,14 +1097,14 @@ function vip_mcp_register_ability_list_network_plugins(): void {
 	wp_register_ability(
 		'vip-multisite/list-network-plugins',
 		array(
-			'label'       => 'List Network Plugins',
-			'description' => 'Returns all plugins that are network-activated across the multisite.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Network Plugins',
+			'description'         => 'Returns all plugins that are network-activated across the multisite.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
 				'properties' => array(),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'plugins' => array( 'type' => 'array' ),
@@ -860,7 +1113,8 @@ function vip_mcp_register_ability_list_network_plugins(): void {
 			'permission_callback' => static function () {
 				return current_user_can( 'manage_network_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
+			// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $input required by abilities API contract.
+			'execute_callback'    => static function ( array $input ): array {
 				if ( ! function_exists( 'get_plugins' ) ) {
 					require_once ABSPATH . 'wp-admin/includes/plugin.php';
 				}
@@ -882,92 +1136,229 @@ function vip_mcp_register_ability_list_network_plugins(): void {
 
 				return array( 'plugins' => $result );
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
 
 // =========================================================================
-// CONTENT MANAGEMENT ABILITIES (11–14)
+// CONTENT MANAGEMENT ABILITIES (11–15)
 // =========================================================================
 
 /**
- * 11. Create a post or page on a specific sub-site.
+ * 11. List registered post types on a specific sub-site.
+ */
+function vip_mcp_register_ability_list_post_types(): void {
+	wp_register_ability(
+		'vip-multisite/list-post-types',
+		array(
+			'label'               => 'List Post Types on Site',
+			'description'         => 'Returns all registered post types on a specific network sub-site, including custom post types '
+				. 'with their labels, capabilities, and supported features. '
+				. 'Use this to discover available post types before creating or listing content.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id(),
+				'properties' => array(
+					'site_id'     => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'public_only' => array(
+						'type'        => 'boolean',
+						'description' => 'If true, only return public post types. If false, return all registered post types including internal ones (default: true).',
+						'default'     => true,
+					),
+				),
+			),
+			'output_schema'       => array(
+				'type'       => 'object',
+				'properties' => array(
+					'success'    => array( 'type' => 'boolean' ),
+					'site_id'    => array( 'type' => 'integer' ),
+					'post_types' => array( 'type' => 'array' ),
+					'message'    => array( 'type' => 'string' ),
+				),
+			),
+			'permission_callback' => static function () {
+				return current_user_can( 'read' );
+			},
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id     = vip_mcp_resolve_site_id( $input );
+				$public_only = $input['public_only'] ?? true;
+
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'    => false,
+						'site_id'    => $site_id,
+						'post_types' => array(),
+						'message'    => "Site ID {$site_id} not found.",
+					);
+				}
+
+				$result = array();
+
+				vip_mcp_switch_to_site( $site_id );
+				try {
+					if ( ! current_user_can( 'read' ) ) {
+						return array(
+							'success'    => false,
+							'site_id'    => $site_id,
+							'post_types' => array(),
+							'message'    => 'You do not have permission to read content on this site.',
+						);
+					}
+
+					$args = $public_only ? array( 'public' => true ) : array();
+					$post_types = get_post_types( $args, 'objects' );
+
+					foreach ( $post_types as $slug => $post_type ) {
+						$supports = array();
+						foreach ( array( 'title', 'editor', 'thumbnail', 'excerpt', 'custom-fields', 'revisions', 'author', 'page-attributes', 'comments' ) as $feature ) {
+							if ( post_type_supports( $slug, $feature ) ) {
+								$supports[] = $feature;
+							}
+						}
+
+						$row = array(
+							'slug'         => $slug,
+							'label'        => $post_type->label,
+							'labels'       => array(
+								'singular' => $post_type->labels->singular_name,
+								'add_new'  => $post_type->labels->add_new_item,
+							),
+							'public'       => (bool) $post_type->public,
+							'hierarchical' => (bool) $post_type->hierarchical,
+							'has_archive'  => (bool) $post_type->has_archive,
+							'show_in_rest' => (bool) $post_type->show_in_rest,
+							'rest_base'    => $post_type->rest_base ? $post_type->rest_base : $slug,
+							'supports'     => $supports,
+							'builtin'      => $post_type->_builtin,
+						);
+
+						// Include taxonomy connections.
+						$taxonomies = get_object_taxonomies( $slug, 'objects' );
+						$row['taxonomies'] = array();
+						foreach ( $taxonomies as $tax_slug => $taxonomy ) {
+							$row['taxonomies'][] = array(
+								'slug'  => $tax_slug,
+								'label' => $taxonomy->label,
+							);
+						}
+
+						$result[] = $row;
+					}
+				} finally {
+					vip_mcp_restore_site();
+				}
+
+				return array(
+					'success'    => true,
+					'site_id'    => $site_id,
+					'post_types' => $result,
+					'message'    => sprintf( 'Found %d post type(s) on site %d.', count( $result ), $site_id ),
+				);
+			},
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
+		)
+	);
+}
+
+/**
+ * 12. Create a post, page, or custom post type entry on a specific sub-site.
  */
 function vip_mcp_register_ability_create_post(): void {
 	wp_register_ability(
 		'vip-multisite/create-post',
 		array(
-			'label'       => 'Create Post or Page on Site',
-			'description' => 'Creates a post or page on a specific network sub-site. Supports setting title, content (raw HTML/blocks), status, and post type.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'title' ),
+			'label'               => 'Create Post on Site',
+			'description'         => 'Creates a post, page, or custom post type entry on a specific network sub-site. '
+				. 'Use list-post-types to discover available post types. '
+				. 'Supports setting title, content (raw HTML/blocks), status, and post type.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'title' ) ),
 				'properties' => array(
-					'site_id' => array(
+					'site_id'   => array(
 						'type'        => 'integer',
-						'description' => 'The ID of the sub-site to create the content on.',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
 					),
-					'title' => array(
+					'title'     => array(
 						'type'        => 'string',
 						'description' => 'The title of the post or page.',
 					),
-					'content' => array(
+					'content'   => array(
 						'type'        => 'string',
 						'description' => 'The body content. Accepts raw HTML or Gutenberg block markup. Leave empty for a blank post.',
 						'default'     => '',
 					),
 					'post_type' => array(
 						'type'        => 'string',
-						'description' => 'The post type to create (default: "page").',
-						'enum'        => array( 'post', 'page' ),
+						'description' => 'The post type to create. Use "post", "page", or any registered custom post type slug (default: "page"). Use list-post-types to discover available types.',
 						'default'     => 'page',
 					),
-					'status' => array(
+					'status'    => array(
 						'type'        => 'string',
 						'description' => 'The publishing status (default: "draft").',
 						'enum'        => array( 'draft', 'publish', 'pending', 'private' ),
 						'default'     => 'draft',
 					),
-					'excerpt' => array(
+					'excerpt'   => array(
 						'type'        => 'string',
 						'description' => 'Optional short excerpt / summary for the post.',
 					),
-					'slug' => array(
+					'slug'      => array(
 						'type'        => 'string',
 						'description' => 'Optional URL slug. Auto-generated from title if omitted.',
 					),
-					'template' => array(
+					'template'  => array(
 						'type'        => 'string',
-						'description' => 'Optional page template filename (e.g. "templates/full-width.html"). Only applicable to pages.',
+						'description' => 'Optional page template filename (e.g. "templates/full-width.html"). Only applicable to hierarchical post types (pages).',
 					),
 					'author_id' => array(
 						'type'        => 'integer',
 						'description' => 'Optional user ID to set as the post author. Defaults to the currently authenticated user.',
 					),
+					'meta'      => array(
+						'type'        => 'object',
+						'description' => 'Optional key/value map of custom field values to set on the post. Keys must be registered with register_post_meta() and have show_in_rest enabled.',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
-					'success'   => array( 'type' => 'boolean' ),
-					'post_id'   => array( 'type' => 'integer' ),
-					'url'       => array( 'type' => 'string', 'description' => 'The public permalink.' ),
-					'edit_url'  => array( 'type' => 'string', 'description' => 'The wp-admin edit URL.' ),
-					'message'   => array( 'type' => 'string' ),
+					'success'  => array( 'type' => 'boolean' ),
+					'post_id'  => array( 'type' => 'integer' ),
+					'url'      => array(
+						'type'        => 'string',
+						'description' => 'The public permalink.',
+					),
+					'edit_url' => array(
+						'type'        => 'string',
+						'description' => 'The wp-admin edit URL.',
+					),
+					'message'  => array( 'type' => 'string' ),
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_posts' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id   = (int) $input['site_id'];
-				$post_type = in_array( $input['post_type'] ?? 'page', array( 'post', 'page' ), true ) ? $input['post_type'] : 'page';
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id   = vip_mcp_resolve_site_id( $input );
+				$post_type = sanitize_key( $input['post_type'] ?? 'page' );
 				$status    = in_array( $input['status'] ?? 'draft', array( 'draft', 'publish', 'pending', 'private' ), true ) ? $input['status'] : 'draft';
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => 0, 'url' => '', 'edit_url' => '', 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'  => false,
+						'post_id'  => 0,
+						'url'      => '',
+						'edit_url' => '',
+						'message'  => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$postarr = array(
@@ -987,25 +1378,89 @@ function vip_mcp_register_ability_create_post(): void {
 				$url      = '';
 				$edit_url = '';
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					// Validate the post type is registered on this site.
+					$post_type_obj = get_post_type_object( $post_type );
+					if ( ! $post_type_obj ) {
+						return array(
+							'success'  => false,
+							'post_id'  => 0,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => "Post type '{$post_type}' is not registered on site {$site_id}.",
+						);
+					}
+
+					// Check per-site capability for this post type.
+					if ( ! current_user_can( $post_type_obj->cap->edit_posts ) ) {
+						return array(
+							'success'  => false,
+							'post_id'  => 0,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => "You do not have permission to create {$post_type} posts on site {$site_id}.",
+						);
+					}
+					if ( 'publish' === $status && ! current_user_can( $post_type_obj->cap->publish_posts ) ) {
+						return array(
+							'success'  => false,
+							'post_id'  => 0,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => "You do not have permission to publish {$post_type} posts on site {$site_id}. Try creating as draft instead.",
+						);
+					}
+
 					// Validate author_id membership inside blog context.
 					if ( ! empty( $input['author_id'] ) ) {
 						$author_id = (int) $input['author_id'];
 						if ( ! is_user_member_of_blog( $author_id, $site_id ) ) {
-							return array( 'success' => false, 'post_id' => 0, 'url' => '', 'edit_url' => '', 'message' => "User ID {$author_id} is not a member of site {$site_id}." );
+							return array(
+								'success'  => false,
+								'post_id'  => 0,
+								'url'      => '',
+								'edit_url' => '',
+								'message'  => "User ID {$author_id} is not a member of site {$site_id}.",
+							);
 						}
 						$postarr['post_author'] = $author_id;
+					}
+
+					// Set meta_input for any provided custom fields.
+					if ( ! empty( $input['meta'] ) && is_array( $input['meta'] ) ) {
+						$postarr['meta_input'] = array();
+						foreach ( $input['meta'] as $meta_key => $meta_value ) {
+							$sanitized_key = sanitize_key( $meta_key );
+							if ( '' === $sanitized_key ) {
+								continue;
+							}
+							// Only allow meta keys registered with show_in_rest (defence-in-depth).
+							$registered = get_registered_meta_keys( 'post', $post_type );
+							if ( ! isset( $registered[ $sanitized_key ] ) ) {
+								$registered_all = get_registered_meta_keys( 'post' );
+								if ( ! isset( $registered_all[ $sanitized_key ] ) ) {
+									continue;
+								}
+							}
+							$postarr['meta_input'][ $sanitized_key ] = $meta_value;
+						}
 					}
 
 					$post_id = wp_insert_post( $postarr, true );
 
 					if ( is_wp_error( $post_id ) ) {
-						return array( 'success' => false, 'post_id' => 0, 'url' => '', 'edit_url' => '', 'message' => $post_id->get_error_message() );
+						return array(
+							'success'  => false,
+							'post_id'  => 0,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => $post_id->get_error_message(),
+						);
 					}
 
-					// Set page template if provided and post type is page.
-					if ( 'page' === $post_type && ! empty( $input['template'] ) ) {
+					// Set page template if provided and post type is hierarchical (pages, etc.).
+					if ( $post_type_obj->hierarchical && ! empty( $input['template'] ) ) {
 						update_post_meta( $post_id, '_wp_page_template', sanitize_text_field( $input['template'] ) );
 					}
 
@@ -1013,18 +1468,18 @@ function vip_mcp_register_ability_create_post(): void {
 					$edit_url = get_admin_url( $site_id, 'post.php?post=' . $post_id . '&action=edit' );
 
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
 					'success'  => true,
 					'post_id'  => (int) $post_id,
-					'url'      => $url ?: '',
+					'url'      => $url ? $url : '',
 					'edit_url' => $edit_url,
 					'message'  => sprintf( '%s "%s" created on site %d (ID: %d, status: %s).', ucfirst( $post_type ), $input['title'], $site_id, $post_id, $status ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1036,19 +1491,25 @@ function vip_mcp_register_ability_get_post(): void {
 	wp_register_ability(
 		'vip-multisite/get-post',
 		array(
-			'label'       => 'Get Post or Page from Site',
-			'description' => 'Retrieves a post or page from a specific network sub-site by ID, including its content, status, and edit URL.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'post_id' ),
+			'label'               => 'Get Post from Site',
+			'description'         => 'Retrieves a post, page, or custom post type entry from a specific network sub-site by ID, including its content, status, custom fields, and edit URL.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'post_id' ) ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'post_id' => array( 'type' => 'integer', 'description' => 'The ID of the post or page to retrieve.' ),
+					'site_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'post_id' => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the post or page to retrieve.',
+					),
 				),
 			),
-			'output_schema' => array(
-				'type' => 'object',
+			'output_schema'       => array(
+				'type'       => 'object',
 				'properties' => array(
 					'success'   => array( 'type' => 'boolean' ),
 					'post_id'   => array( 'type' => 'integer' ),
@@ -1063,36 +1524,70 @@ function vip_mcp_register_ability_get_post(): void {
 					'template'  => array( 'type' => 'string' ),
 					'date'      => array( 'type' => 'string' ),
 					'modified'  => array( 'type' => 'string' ),
+					'meta'      => array(
+						'type'        => 'object',
+						'description' => 'Registered custom field values (keys registered with register_post_meta).',
+					),
 					'message'   => array( 'type' => 'string' ),
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'read' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$post_id = (int) $input['post_id'];
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$post     = null;
 				$url      = '';
 				$edit_url = '';
 				$template = '';
-				$response = array( 'success' => false, 'message' => 'An unexpected error occurred.' );
+				$response = array(
+					'success' => false,
+					'message' => 'An unexpected error occurred.',
+				);
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
 					$post = get_post( $post_id );
 
 					if ( ! $post ) {
-						$response = array( 'success' => false, 'message' => "Post ID {$post_id} not found on site {$site_id}." );
+						$response = array(
+							'success' => false,
+							'message' => "Post ID {$post_id} not found on site {$site_id}.",
+						);
+					} elseif ( ! current_user_can( 'read_post', $post_id ) ) {
+						$response = array(
+							'success' => false,
+							'message' => "You do not have permission to read post {$post_id} on site {$site_id}.",
+						);
 					} else {
 						$url      = get_permalink( $post_id );
 						$edit_url = get_admin_url( $site_id, 'post.php?post=' . $post_id . '&action=edit' );
 						$template = get_post_meta( $post_id, '_wp_page_template', true );
+
+						// Gather registered meta for this post type.
+						$meta_values    = array();
+						$registered     = get_registered_meta_keys( 'post', $post->post_type );
+						$registered_all = get_registered_meta_keys( 'post' );
+						$all_keys       = array_merge( array_keys( $registered_all ), array_keys( $registered ) );
+						foreach ( array_unique( $all_keys ) as $meta_key ) {
+							// Skip private/internal keys.
+							if ( str_starts_with( $meta_key, '_' ) ) {
+								continue;
+							}
+							$val = get_post_meta( $post_id, $meta_key, true );
+							if ( '' !== $val && false !== $val ) {
+								$meta_values[ $meta_key ] = $val;
+							}
+						}
 
 						// Build response inside try so $post properties are safe to access.
 						$response = array(
@@ -1104,22 +1599,22 @@ function vip_mcp_register_ability_get_post(): void {
 							'status'    => $post->post_status,
 							'post_type' => $post->post_type,
 							'slug'      => $post->post_name,
-							'url'       => $url ?: '',
+							'url'       => $url ? $url : '',
 							'edit_url'  => $edit_url,
-							'template'  => $template ?: '',
+							'template'  => $template ? $template : '',
 							'date'      => $post->post_date,
 							'modified'  => $post->post_modified,
+							'meta'      => $meta_values,
 							'message'   => 'Post retrieved successfully.',
 						);
 					}
-
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return $response;
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1131,28 +1626,54 @@ function vip_mcp_register_ability_update_post(): void {
 	wp_register_ability(
 		'vip-multisite/update-post',
 		array(
-			'label'       => 'Update Post or Page on Site',
-			'description' => 'Updates the title, content, status, or other fields of an existing post or page on a specific network sub-site. Only include fields you want to change.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'post_id' ),
+			'label'               => 'Update Post on Site',
+			'description'         => 'Updates the title, content, status, custom fields, or other fields of an existing post, page, '
+				. 'or custom post type entry on a specific network sub-site. Only include fields you want to change.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'post_id' ) ),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site.' ),
-					'post_id' => array( 'type' => 'integer', 'description' => 'The ID of the post or page to update.' ),
-					'title'   => array( 'type' => 'string', 'description' => 'New title.' ),
-					'content' => array( 'type' => 'string', 'description' => 'New body content. Accepts raw HTML or Gutenberg block markup.' ),
-					'excerpt' => array( 'type' => 'string', 'description' => 'New excerpt / summary.' ),
-					'status'  => array(
+					'site_id'  => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
+					'post_id'  => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the post or page to update.',
+					),
+					'title'    => array(
+						'type'        => 'string',
+						'description' => 'New title.',
+					),
+					'content'  => array(
+						'type'        => 'string',
+						'description' => 'New body content. Accepts raw HTML or Gutenberg block markup.',
+					),
+					'excerpt'  => array(
+						'type'        => 'string',
+						'description' => 'New excerpt / summary.',
+					),
+					'status'   => array(
 						'type'        => 'string',
 						'description' => 'New publishing status.',
 						'enum'        => array( 'draft', 'publish', 'pending', 'private', 'trash' ),
 					),
-					'slug' => array( 'type' => 'string', 'description' => 'New URL slug.' ),
-					'template' => array( 'type' => 'string', 'description' => 'New page template filename. Pass an empty string to reset to the default template.' ),
+					'slug'     => array(
+						'type'        => 'string',
+						'description' => 'New URL slug.',
+					),
+					'template' => array(
+						'type'        => 'string',
+						'description' => 'New page template filename. Pass an empty string to reset to the default template. Only applicable to hierarchical post types.',
+					),
+					'meta'     => array(
+						'type'        => 'object',
+						'description' => 'Key/value map of custom field values to update. Keys must be registered with register_post_meta() and have show_in_rest enabled.',
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success'  => array( 'type' => 'boolean' ),
@@ -1163,24 +1684,61 @@ function vip_mcp_register_ability_update_post(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'edit_posts' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$post_id = (int) $input['post_id'];
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'post_id' => $post_id, 'url' => '', 'edit_url' => '', 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success'  => false,
+						'post_id'  => $post_id,
+						'url'      => '',
+						'edit_url' => '',
+						'message'  => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$url      = '';
 				$edit_url = '';
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
 					$post = get_post( $post_id );
 					if ( ! $post ) {
-						return array( 'success' => false, 'post_id' => $post_id, 'url' => '', 'edit_url' => '', 'message' => "Post ID {$post_id} not found on site {$site_id}." );
+						return array(
+							'success'  => false,
+							'post_id'  => $post_id,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => "Post ID {$post_id} not found on site {$site_id}.",
+						);
+					}
+
+					// Check per-site capability for this specific post.
+					if ( ! current_user_can( 'edit_post', $post_id ) ) {
+						return array(
+							'success'  => false,
+							'post_id'  => $post_id,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => "You do not have permission to edit post {$post_id} on site {$site_id}.",
+						);
+					}
+
+					// Check publish capability if changing status to publish.
+					if ( isset( $input['status'] ) && 'publish' === $input['status'] && 'publish' !== $post->post_status ) {
+						$post_type_obj = get_post_type_object( $post->post_type );
+						if ( $post_type_obj && ! current_user_can( $post_type_obj->cap->publish_posts ) ) {
+							return array(
+								'success'  => false,
+								'post_id'  => $post_id,
+								'url'      => '',
+								'edit_url' => '',
+								'message'  => "You do not have permission to publish this {$post->post_type} on site {$site_id}.",
+							);
+						}
 					}
 
 					$postarr = array( 'ID' => $post_id );
@@ -1201,7 +1759,13 @@ function vip_mcp_register_ability_update_post(): void {
 					if ( isset( $input['status'] ) ) {
 						$allowed_statuses = array( 'draft', 'publish', 'pending', 'private', 'trash' );
 						if ( ! in_array( $input['status'], $allowed_statuses, true ) ) {
-							return array( 'success' => false, 'post_id' => $post_id, 'url' => '', 'edit_url' => '', 'message' => "Invalid status '{$input['status']}'. Must be one of: " . implode( ', ', $allowed_statuses ) . '.' );
+							return array(
+								'success'  => false,
+								'post_id'  => $post_id,
+								'url'      => '',
+								'edit_url' => '',
+								'message'  => "Invalid status '{$input['status']}'. Must be one of: " . implode( ', ', $allowed_statuses ) . '.',
+							);
 						}
 						$postarr['post_status'] = $input['status'];
 						$updated[] = 'status';
@@ -1211,8 +1775,14 @@ function vip_mcp_register_ability_update_post(): void {
 						$updated[] = 'slug';
 					}
 
-					if ( empty( $updated ) && ! isset( $input['template'] ) ) {
-						return array( 'success' => false, 'post_id' => $post_id, 'url' => '', 'edit_url' => '', 'message' => 'No fields provided to update.' );
+					if ( empty( $updated ) && ! isset( $input['template'] ) && empty( $input['meta'] ) ) {
+						return array(
+							'success'  => false,
+							'post_id'  => $post_id,
+							'url'      => '',
+							'edit_url' => '',
+							'message'  => 'No fields provided to update.',
+						);
 					}
 
 					// Only call wp_update_post() if there are actual post fields to write.
@@ -1221,36 +1791,59 @@ function vip_mcp_register_ability_update_post(): void {
 						$result = wp_update_post( $postarr, true );
 
 						if ( is_wp_error( $result ) ) {
-							return array( 'success' => false, 'post_id' => $post_id, 'url' => '', 'edit_url' => '', 'message' => $result->get_error_message() );
+							return array(
+								'success'  => false,
+								'post_id'  => $post_id,
+								'url'      => '',
+								'edit_url' => '',
+								'message'  => $result->get_error_message(),
+							);
 						}
 					}
 
 					// Handle template separately as it is stored in post meta.
-					// Only applicable to pages — matches the guard in create-post.
+					// Only applicable to hierarchical post types — matches the guard in create-post.
 					if ( isset( $input['template'] ) ) {
-						if ( 'page' === $post->post_type ) {
+						$post_type_obj = get_post_type_object( $post->post_type );
+						if ( $post_type_obj && $post_type_obj->hierarchical ) {
 							update_post_meta( $post_id, '_wp_page_template', sanitize_text_field( $input['template'] ) );
 							$updated[] = 'template';
 						}
-						// Silently skip for non-page post types — template is not meaningful.
+					}
+
+					// Handle custom field updates.
+					if ( ! empty( $input['meta'] ) && is_array( $input['meta'] ) ) {
+						$registered     = get_registered_meta_keys( 'post', $post->post_type );
+						$registered_all = get_registered_meta_keys( 'post' );
+						foreach ( $input['meta'] as $meta_key => $meta_value ) {
+							$sanitized_key = sanitize_key( $meta_key );
+							if ( '' === $sanitized_key ) {
+								continue;
+							}
+							if ( ! isset( $registered[ $sanitized_key ] ) && ! isset( $registered_all[ $sanitized_key ] ) ) {
+								continue;
+							}
+							update_post_meta( $post_id, $sanitized_key, $meta_value );
+							$updated[] = "meta:{$sanitized_key}";
+						}
 					}
 
 					$url      = get_permalink( $post_id );
 					$edit_url = get_admin_url( $site_id, 'post.php?post=' . $post_id . '&action=edit' );
 
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
 					'success'  => true,
 					'post_id'  => (int) $post_id,
-					'url'      => $url ?: '',
+					'url'      => $url ? $url : '',
 					'edit_url' => $edit_url,
 					'message'  => sprintf( 'Post %d on site %d updated. Fields changed: %s.', $post_id, $site_id, implode( ', ', $updated ) ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1262,35 +1855,48 @@ function vip_mcp_register_ability_list_posts(): void {
 	wp_register_ability(
 		'vip-multisite/list-posts',
 		array(
-			'label'       => 'List Posts or Pages on Site',
-			'description' => 'Returns a paginated list of posts or pages on a specific network sub-site, with optional filtering by status or search term.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
+			'label'               => 'List Posts on Site',
+			'description'         => 'Returns a paginated list of posts, pages, or custom post type entries on a specific network '
+				. 'sub-site, with optional filtering by status or search term. '
+				. 'Use list-post-types to discover available post types.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
 				'type'       => 'object',
-				'required'   => array( 'site_id' ),
+				'required'   => vip_mcp_required_with_site_id(),
 				'properties' => array(
-					'site_id' => array( 'type' => 'integer', 'description' => 'The ID of the sub-site to query.' ),
+					'site_id'   => array(
+						'type'        => 'integer',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
+					),
 					'post_type' => array(
 						'type'        => 'string',
-						'description' => 'Post type to list (default: "page").',
-						'enum'        => array( 'post', 'page' ),
+						'description' => 'Post type to list. Use "post", "page", or any registered custom post type slug (default: "page"). Use list-post-types to discover available types.',
 						'default'     => 'page',
 					),
-					'status' => array(
+					'status'    => array(
 						'type'        => 'string',
 						'description' => 'Filter by publishing status. Use "any" for all statuses (default: "any").',
 						'enum'        => array( 'any', 'draft', 'publish', 'pending', 'private', 'trash' ),
 						'default'     => 'any',
 					),
-					'search' => array(
+					'search'    => array(
 						'type'        => 'string',
 						'description' => 'Optional keyword to search in post titles and content.',
 					),
-					'per_page' => array( 'type' => 'integer', 'default' => 20, 'minimum' => 1, 'maximum' => 100 ),
-					'page'     => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
+					'per_page'  => array(
+						'type'    => 'integer',
+						'default' => 20,
+						'minimum' => 1,
+						'maximum' => 100,
+					),
+					'page'      => array(
+						'type'    => 'integer',
+						'default' => 1,
+						'minimum' => 1,
+					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'posts'       => array( 'type' => 'array' ),
@@ -1299,11 +1905,11 @@ function vip_mcp_register_ability_list_posts(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'read' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id   = (int) $input['site_id'];
-				$post_type = in_array( $input['post_type'] ?? 'page', array( 'post', 'page' ), true ) ? $input['post_type'] : 'page';
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id   = vip_mcp_resolve_site_id( $input );
+				$post_type = sanitize_key( $input['post_type'] ?? 'page' );
 				$allowed_statuses = array( 'any', 'draft', 'publish', 'pending', 'private', 'trash' );
 				$status = in_array( $input['status'] ?? 'any', $allowed_statuses, true )
 					? ( $input['status'] ?? 'any' )
@@ -1311,8 +1917,13 @@ function vip_mcp_register_ability_list_posts(): void {
 				$per_page  = min( max( (int) ( $input['per_page'] ?? 20 ), 1 ), 100 );
 				$page      = isset( $input['page'] ) ? max( 1, (int) $input['page'] ) : 1;
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'posts' => array(), 'total' => 0, 'total_pages' => 0, 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'posts'       => array(),
+						'total'       => 0,
+						'total_pages' => 0,
+						'message'     => "Site ID {$site_id} not found.",
+					);
 				}
 
 				$query_args = array(
@@ -1332,8 +1943,29 @@ function vip_mcp_register_ability_list_posts(): void {
 				$result = array();
 				$total  = 0;
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					// Validate the post type is registered on this site.
+					$post_type_obj = get_post_type_object( $post_type );
+					if ( ! $post_type_obj ) {
+						return array(
+							'posts'       => array(),
+							'total'       => 0,
+							'total_pages' => 0,
+							'message'     => "Post type '{$post_type}' is not registered on site {$site_id}.",
+						);
+					}
+
+					// Check per-site read capability for this post type.
+					if ( ! current_user_can( $post_type_obj->cap->read ) ) {
+						return array(
+							'posts'       => array(),
+							'total'       => 0,
+							'total_pages' => 0,
+							'message'     => "You do not have permission to list {$post_type} posts on site {$site_id}.",
+						);
+					}
+
 					$query  = new WP_Query( $query_args );
 					$posts  = $query->posts;
 					$total  = (int) $query->found_posts;
@@ -1342,6 +1974,7 @@ function vip_mcp_register_ability_list_posts(): void {
 						$result[] = array(
 							'post_id'   => (int) $post->ID,
 							'title'     => $post->post_title,
+							'post_type' => $post->post_type,
 							'status'    => $post->post_status,
 							'slug'      => $post->post_name,
 							'date'      => $post->post_date,
@@ -1351,7 +1984,7 @@ function vip_mcp_register_ability_list_posts(): void {
 						);
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -1360,7 +1993,7 @@ function vip_mcp_register_ability_list_posts(): void {
 					'total_pages' => (int) ceil( $total / $per_page ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1377,16 +2010,17 @@ function vip_mcp_register_ability_get_site_option(): void {
 	wp_register_ability(
 		'vip-multisite/get-site-option',
 		array(
-			'label'       => 'Get Site Option',
-			'description' => 'Reads one or more WordPress options (get_option) from a specific network sub-site. Useful for inspecting settings such as the front page mode, assigned pages, site title, and more.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'option_names' ),
+			'label'               => 'Get Site Option',
+			'description'         => 'Reads one or more WordPress options (get_option) from a specific network sub-site. '
+				. 'Useful for inspecting settings such as the front page mode, assigned pages, site title, and more.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'option_names' ) ),
 				'properties' => array(
-					'site_id' => array(
+					'site_id'      => array(
 						'type'        => 'integer',
-						'description' => 'The ID of the sub-site to read options from.',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
 					),
 					'option_names' => array(
 						'type'        => 'array',
@@ -1397,7 +2031,7 @@ function vip_mcp_register_ability_get_site_option(): void {
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
 					'success' => array( 'type' => 'boolean' ),
@@ -1410,18 +2044,28 @@ function vip_mcp_register_ability_get_site_option(): void {
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'manage_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id      = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id      = vip_mcp_resolve_site_id( $input );
 				$option_names = $input['option_names'] ?? array();
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'site_id' => $site_id, 'options' => array(), 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'site_id' => $site_id,
+						'options' => array(),
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
 				if ( empty( $option_names ) || ! is_array( $option_names ) ) {
-					return array( 'success' => false, 'site_id' => $site_id, 'options' => array(), 'message' => 'option_names must be a non-empty array.' );
+					return array(
+						'success' => false,
+						'site_id' => $site_id,
+						'options' => array(),
+						'message' => 'option_names must be a non-empty array.',
+					);
 				}
 
 				// Sanitize each key and cap at 20.
@@ -1436,15 +2080,34 @@ function vip_mcp_register_ability_get_site_option(): void {
 				// if extensibility is needed. Hardcoded is the safer default for now.
 				// Note: auth_key etc. are usually PHP constants, not DB options, but block them defensively.
 				$read_blocked = array(
-					'auth_key', 'secure_auth_key', 'logged_in_key', 'nonce_key',
-					'auth_salt', 'secure_auth_salt', 'logged_in_salt', 'nonce_salt',
-					'mailserver_pass', 'mailserver_login', 'mailserver_url', 'mailserver_port',
-					'db_password', 'db_user', // defensive — not typically stored as options
+					'auth_key',
+					'secure_auth_key',
+					'logged_in_key',
+					'nonce_key',
+					'auth_salt',
+					'secure_auth_salt',
+					'logged_in_salt',
+					'nonce_salt',
+					'mailserver_pass',
+					'mailserver_login',
+					'mailserver_url',
+					'mailserver_port',
+					'db_password',
+					'db_user', // Defensive — not typically stored as options.
 				);
 
 				$result = array();
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'manage_options' ) ) {
+						return array(
+							'success' => false,
+							'site_id' => $site_id,
+							'options' => array(),
+							'message' => "You do not have permission to read options on site {$site_id}.",
+						);
+					}
+
 					foreach ( $option_names as $key ) {
 						if ( in_array( $key, $read_blocked, true ) ) {
 							$result[ $key ] = '[redacted]';
@@ -1455,7 +2118,7 @@ function vip_mcp_register_ability_get_site_option(): void {
 						$result[ $key ] = is_bool( $value ) ? $value : ( is_scalar( $value ) ? (string) $value : $value );
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				return array(
@@ -1465,7 +2128,7 @@ function vip_mcp_register_ability_get_site_option(): void {
 					'message' => sprintf( 'Retrieved %d option(s) from site %d.', count( $result ), $site_id ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }
@@ -1482,47 +2145,76 @@ function vip_mcp_register_ability_update_site_option(): void {
 	wp_register_ability(
 		'vip-multisite/update-site-option',
 		array(
-			'label'       => 'Update Site Option',
-			'description' => 'Writes one or more WordPress options (update_option) on a specific network sub-site. Only allowlisted options may be written — this includes common reading, discussion, permalink, media, and homepage settings (show_on_front, page_on_front, page_for_posts). Any key not on the allowlist is skipped with a reason.',
-			'category'    => 'vip-multisite',
-			'input_schema' => array(
-				'type'     => 'object',
-				'required' => array( 'site_id', 'options' ),
+			'label'               => 'Update Site Option',
+			'description'         => 'Writes one or more WordPress options (update_option) on a specific network sub-site. '
+				. 'Only allowlisted options may be written — this includes common reading, discussion, permalink, '
+				. 'media, and homepage settings (show_on_front, page_on_front, page_for_posts). '
+				. 'Any key not on the allowlist is skipped with a reason.',
+			'category'            => 'vip-multisite',
+			'input_schema'        => array(
+				'type'       => 'object',
+				'required'   => vip_mcp_required_with_site_id( array( 'options' ) ),
 				'properties' => array(
 					'site_id' => array(
 						'type'        => 'integer',
-						'description' => 'The ID of the sub-site to update options on.',
+						'description' => 'The ID of the target site. Required on Multisite; defaults to current site on single-site.',
 					),
 					'options' => array(
 						'type'        => 'object',
-						'description' => 'Key/value map of options to set. Values are cast to the appropriate type per option. Common keys: show_on_front ("posts" or "page"), page_on_front (page ID or title), page_for_posts (page ID or title), blogname, blogdescription, posts_per_page, default_comment_status, permalink_structure.',
+						'description' => 'Key/value map of options to set. Values are cast to the appropriate type per option. '
+							. 'Common keys: show_on_front ("posts" or "page"), page_on_front (page ID or title), '
+							. 'page_for_posts (page ID or title), blogname, blogdescription, posts_per_page, '
+							. 'default_comment_status, permalink_structure.',
 					),
 				),
 			),
-			'output_schema' => array(
+			'output_schema'       => array(
 				'type'       => 'object',
 				'properties' => array(
-					'success'  => array( 'type' => 'boolean' ),
-					'site_id'  => array( 'type' => 'integer' ),
-					'updated'  => array( 'type' => 'array',  'description' => 'Option keys that were successfully updated.' ),
-					'skipped'  => array( 'type' => 'array',  'description' => 'Option keys that were skipped (blocked or value unchanged).' ),
-					'errors'   => array( 'type' => 'array',  'description' => 'Option keys that failed with a reason.' ),
-					'message'  => array( 'type' => 'string' ),
+					'success' => array( 'type' => 'boolean' ),
+					'site_id' => array( 'type' => 'integer' ),
+					'updated' => array(
+						'type'        => 'array',
+						'description' => 'Option keys that were successfully updated.',
+					),
+					'skipped' => array(
+						'type'        => 'array',
+						'description' => 'Option keys that were skipped (blocked or value unchanged).',
+					),
+					'errors'  => array(
+						'type'        => 'array',
+						'description' => 'Option keys that failed with a reason.',
+					),
+					'message' => array( 'type' => 'string' ),
 				),
 			),
 			'permission_callback' => static function () {
-				return current_user_can( 'manage_network_options' );
+				return current_user_can( 'manage_options' );
 			},
-			'execute_callback' => static function ( array $input ): array {
-				$site_id = (int) $input['site_id'];
+			'execute_callback'    => static function ( array $input ): array {
+				$site_id = vip_mcp_resolve_site_id( $input );
 				$options = $input['options'] ?? array();
 
-				if ( ! get_site( $site_id ) ) {
-					return array( 'success' => false, 'site_id' => $site_id, 'updated' => array(), 'skipped' => array(), 'errors' => array(), 'message' => "Site ID {$site_id} not found." );
+				if ( ! vip_mcp_validate_site( $site_id ) ) {
+					return array(
+						'success' => false,
+						'site_id' => $site_id,
+						'updated' => array(),
+						'skipped' => array(),
+						'errors'  => array(),
+						'message' => "Site ID {$site_id} not found.",
+					);
 				}
 
 				if ( empty( $options ) || ! is_array( $options ) ) {
-					return array( 'success' => false, 'site_id' => $site_id, 'updated' => array(), 'skipped' => array(), 'errors' => array(), 'message' => 'options must be a non-empty key/value object.' );
+					return array(
+						'success' => false,
+						'site_id' => $site_id,
+						'updated' => array(),
+						'skipped' => array(),
+						'errors'  => array(),
+						'message' => 'options must be a non-empty key/value object.',
+					);
 				}
 
 				// Explicit allowlist — only these options may be written via MCP.
@@ -1532,28 +2224,57 @@ function vip_mcp_register_ability_update_site_option(): void {
 				// To expose additional options, add them to this list after review.
 				$allowed_options = array(
 					// Identity.
-					'blogname', 'blogdescription',
+					'blogname',
+					'blogdescription',
 					// Homepage settings.
-					'show_on_front', 'page_on_front', 'page_for_posts',
+					'show_on_front',
+					'page_on_front',
+					'page_for_posts',
 					// Reading.
-					'posts_per_page', 'posts_per_rss', 'rss_use_excerpt', 'blog_public',
+					'posts_per_page',
+					'posts_per_rss',
+					'rss_use_excerpt',
+					'blog_public',
 					// Writing / formats.
-					'default_category', 'default_post_format', 'default_pingback_flag',
+					'default_category',
+					'default_post_format',
+					'default_pingback_flag',
 					// Discussion.
-					'default_comment_status', 'default_ping_status', 'require_name_email',
-					'comment_registration', 'close_comments_for_old_posts',
-					'close_comments_days_old', 'thread_comments', 'thread_comments_depth',
-					'page_comments', 'comments_per_page', 'default_comments_page',
-					'comment_order', 'comments_notify', 'moderation_notify',
-					'comment_moderation', 'comment_whitelist', 'comment_max_links',
+					'default_comment_status',
+					'default_ping_status',
+					'require_name_email',
+					'comment_registration',
+					'close_comments_for_old_posts',
+					'close_comments_days_old',
+					'thread_comments',
+					'thread_comments_depth',
+					'page_comments',
+					'comments_per_page',
+					'default_comments_page',
+					'comment_order',
+					'comments_notify',
+					'moderation_notify',
+					'comment_moderation',
+					'comment_whitelist',
+					'comment_max_links',
 					// Date / time.
-					'date_format', 'time_format', 'start_of_week', 'timezone_string', 'gmt_offset',
+					'date_format',
+					'time_format',
+					'start_of_week',
+					'timezone_string',
+					'gmt_offset',
 					// Permalinks.
-					'permalink_structure', 'category_base', 'tag_base',
+					'permalink_structure',
+					'category_base',
+					'tag_base',
 					// Media.
-					'thumbnail_size_w', 'thumbnail_size_h', 'thumbnail_crop',
-					'medium_size_w', 'medium_size_h',
-					'large_size_w', 'large_size_h',
+					'thumbnail_size_w',
+					'thumbnail_size_h',
+					'thumbnail_crop',
+					'medium_size_w',
+					'medium_size_h',
+					'large_size_w',
+					'large_size_h',
 					'uploads_use_yearmonth_folders',
 				);
 
@@ -1564,25 +2285,45 @@ function vip_mcp_register_ability_update_site_option(): void {
 				$skipped = array();
 				$errors  = array();
 
-				switch_to_blog( $site_id );
+				vip_mcp_switch_to_site( $site_id );
 				try {
+					if ( ! current_user_can( 'manage_options' ) ) {
+						return array(
+							'success' => false,
+							'site_id' => $site_id,
+							'updated' => array(),
+							'skipped' => array(),
+							'errors'  => array(),
+							'message' => "You do not have permission to update options on site {$site_id}.",
+						);
+					}
+
 					foreach ( $options as $key => $value ) {
 						$key = sanitize_key( $key );
 
 						if ( empty( $key ) ) {
-							$skipped[] = array( 'key' => $key, 'reason' => 'Invalid option key.' );
+							$skipped[] = array(
+								'key'    => $key,
+								'reason' => 'Invalid option key.',
+							);
 							continue;
 						}
 
 						if ( ! in_array( $key, $allowed_options, true ) ) {
-							$skipped[] = array( 'key' => $key, 'reason' => 'Option not in allowlist. Contact a developer to add it after review.' );
+							$skipped[] = array(
+								'key'    => $key,
+								'reason' => 'Option not in allowlist. Contact a developer to add it after review.',
+							);
 							continue;
 						}
 
 						// For show_on_front, enforce the two valid WordPress values.
 						if ( 'show_on_front' === $key ) {
 							if ( ! in_array( $value, array( 'posts', 'page' ), true ) ) {
-								$errors[] = array( 'key' => $key, 'reason' => "Invalid value '{$value}'. Must be 'posts' or 'page'." );
+								$errors[] = array(
+									'key'    => $key,
+									'reason' => "Invalid value '{$value}'. Must be 'posts' or 'page'.",
+								);
 								continue;
 							}
 						}
@@ -1591,18 +2332,23 @@ function vip_mcp_register_ability_update_site_option(): void {
 						if ( in_array( $key, $page_id_options, true ) ) {
 							if ( ! is_numeric( $value ) ) {
 								// Resolve by exact post title — get_page_by_title() is deprecated since WP 6.2.
-								$title_query = new WP_Query( array(
-									'post_type'              => 'page',
-									'title'                  => sanitize_text_field( $value ),
-									'posts_per_page'         => 1,
-									'post_status'            => array( 'publish', 'draft', 'private' ),
-									'no_found_rows'          => true,
-									'update_post_meta_cache' => false,
-									'update_post_term_cache' => false,
-								) );
+								$title_query = new WP_Query(
+									array(
+										'post_type'      => 'page',
+										'title'          => sanitize_text_field( $value ),
+										'posts_per_page' => 1,
+										'post_status'    => array( 'publish', 'draft', 'private' ),
+										'no_found_rows'  => true,
+										'update_post_meta_cache' => false,
+										'update_post_term_cache' => false,
+									)
+								);
 								$page = $title_query->posts[0] ?? null;
 								if ( ! $page ) {
-									$errors[] = array( 'key' => $key, 'reason' => "Could not find a page with the title '{$value}' on site {$site_id}." );
+									$errors[] = array(
+										'key'    => $key,
+										'reason' => "Could not find a page with the title '{$value}' on site {$site_id}.",
+									);
 									continue;
 								}
 								$value = $page->ID;
@@ -1611,7 +2357,10 @@ function vip_mcp_register_ability_update_site_option(): void {
 								// Validate the page ID exists and is actually a page.
 								$page = get_post( $value );
 								if ( ! $page || 'page' !== $page->post_type ) {
-									$errors[] = array( 'key' => $key, 'reason' => "Post ID {$value} does not exist or is not a page on site {$site_id}." );
+									$errors[] = array(
+										'key'    => $key,
+										'reason' => "Post ID {$value} does not exist or is not a page on site {$site_id}.",
+									);
 									continue;
 								}
 							}
@@ -1621,17 +2370,23 @@ function vip_mcp_register_ability_update_site_option(): void {
 
 						if ( false === $result ) {
 							// update_option returns false both on DB error AND when value is unchanged.
-							if ( get_option( $key ) == $value ) { // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
-								$skipped[] = array( 'key' => $key, 'reason' => 'Value unchanged.' );
+							if ( get_option( $key ) === $value ) {
+								$skipped[] = array(
+									'key'    => $key,
+									'reason' => 'Value unchanged.',
+								);
 							} else {
-								$errors[] = array( 'key' => $key, 'reason' => 'update_option returned false — possible database error.' );
+								$errors[] = array(
+									'key'    => $key,
+									'reason' => 'update_option returned false — possible database error.',
+								);
 							}
 						} else {
 							$updated[] = $key;
 						}
 					}
 				} finally {
-					restore_current_blog();
+					vip_mcp_restore_site();
 				}
 
 				$success = empty( $errors );
@@ -1655,7 +2410,7 @@ function vip_mcp_register_ability_update_site_option(): void {
 					'message' => sprintf( 'Site %d options: %s.', $site_id, implode( ', ', $parts ) ),
 				);
 			},
-			'meta' => array( 'mcp' => array( 'public' => true ) ),
+			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
 }

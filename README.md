@@ -1,14 +1,14 @@
-# WPVIP Multisite MCP Abilities
+# WPVIP MCP Abilities
 
-A WordPress network (mu-plugin) that registers 26 MCP abilities for managing a WordPress Multisite installation via AI agents. Covers site management, content operations, Site Editor templates/template-parts/patterns, theme activation, user management, and site options.
+A WordPress plugin (v1.5.0) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
 
 ## Requirements
 
 - PHP 8.0+
 - WordPress 6.9+
-- WordPress Multisite (Network) enabled
 - [MCP Abilities API](https://github.com/WordPress/wordpress-develop) (WordPress core or plugin providing `wp_register_ability`)
 - MCP Adapter plugin (connects WordPress to MCP-compatible clients)
+- Multisite (Network) enabled — optional; required only for network-level abilities
 
 ## Installation
 
@@ -23,13 +23,24 @@ wp-content/plugins/
     └── LICENSE
 ```
 
-2. **Network Activate** the plugin from the Network Admin → Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
+2. **Activate** the plugin from the Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities`). On Multisite, network-activate from Network Admin → Plugins (or `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
 
-This is a network-only plugin (`Network: true` in the plugin header). It must be network-activated to function.
+On single-site, 18 site-level abilities register. On Multisite, all 28 abilities register.
 
 ## Permissions
 
-Every ability requires **`manage_network_options`** (Super Admin). There are no public or lower-privilege abilities. This is intentional — these abilities perform network-wide operations.
+Abilities use a two-layer permission model:
+
+1. **`permission_callback`** — gates whether the ability is visible to the user (baseline capability check)
+2. **`execute_callback`** — enforces per-site capabilities after `switch_to_blog()` to ensure the user has the right permissions on the target site
+
+| Ability group | permission_callback | Per-site check |
+|---|---|---|
+| Network ops (sites, users, themes, plugins) | `manage_network_options` | — |
+| Content reads (list-post-types, get-post, list-posts) | `read` | `read` / `read_post` on target site |
+| Content writes (create-post, update-post) | `edit_posts` | Post-type caps (`edit_posts`, `publish_posts`) on target site |
+| Site options (get/update) | `manage_options` | `manage_options` on target site |
+| Site editor (templates, parts, patterns) | `edit_theme_options` | `edit_theme_options` on target site |
 
 ## Abilities Reference
 
@@ -58,14 +69,15 @@ Every ability requires **`manage_network_options`** (Super Admin). There are no 
 | `list-themes` | Read | All installed themes with network-enabled status. Optionally shows which is active on a given site. |
 | `activate-theme` | Write | Activates a theme on a specific site. Auto-network-enables the theme if needed (controllable via `network_enable`). |
 
-### Content Management (4 abilities)
+### Content Management (5 abilities)
 
 | Ability | Type | Description |
 |---------|------|-------------|
-| `create-post` | Write | Creates a post or page on a sub-site. Supports title, content (HTML/blocks), status, excerpt, slug, page template, and author. |
-| `get-post` | Read | Retrieves a post/page by ID including content, status, permalink, edit URL, and page template. |
-| `update-post` | Write | Partial updates — only include fields to change. Supports title, content, excerpt, status, slug, and page template. |
-| `list-posts` | Read | Paginated list with post type, status, and search filters. |
+| `list-post-types` | Read | Discovers all registered post types on a site, including custom post types. Returns labels, capabilities, supported features, REST info, and connected taxonomies. |
+| `create-post` | Write | Creates a post, page, or custom post type entry. Supports title, content (HTML/blocks), status, excerpt, slug, template, author, and custom fields (meta). |
+| `get-post` | Read | Retrieves any post by ID including content, status, permalink, edit URL, template, and registered custom field values. |
+| `update-post` | Write | Partial updates — only include fields to change. Supports title, content, excerpt, status, slug, template, and custom fields (meta). |
+| `list-posts` | Read | Paginated list of any post type with status and search filters. |
 
 ### Site Options (2 abilities)
 
@@ -107,7 +119,7 @@ Every ability requires **`manage_network_options`** (Super Admin). There are no 
 
 The plugin is split into two files:
 
-**`wpvip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category and all network/content/options abilities. Loads the site editor file via `require_once`.
+**`wpvip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category, multisite-compatibility helpers, and all network/content/options abilities. Loads the site editor file via `require_once`.
 
 **`wpvip-mcp-site-editor-abilities.php`** — Site Editor abilities plus REST API defence-in-depth infrastructure. Organised into five sections:
 
@@ -119,7 +131,7 @@ The plugin is split into two files:
 
 ### Key patterns
 
-**`switch_to_blog` / `restore_current_blog`** — All abilities that operate on sub-sites wrap their work in `try/finally` to guarantee `restore_current_blog()` runs even on early returns or exceptions.
+**Single-site / Multisite compatibility** — Five helper functions (`vip_mcp_resolve_site_id`, `vip_mcp_validate_site`, `vip_mcp_switch_to_site`, `vip_mcp_restore_site`, `vip_mcp_required_with_site_id`) abstract blog-switching so the same ability code runs on both single-site and Multisite. On single-site the switch/restore calls are no-ops and `site_id` defaults to `get_current_blog_id()`. All site-level abilities wrap work in `try/finally` to guarantee context restoration.
 
 **`$response` variable** — Write abilities initialise a `$response` fallback array before `try`, assign it in every code path, and return it after `finally`. This prevents undefined variable issues and satisfies the `array` return type.
 
@@ -131,11 +143,13 @@ The plugin is split into two files:
 
 | Layer | Protection |
 |-------|-----------|
-| MCP abilities | `manage_network_options` permission callback on every ability |
+| MCP abilities | Two-layer permission model: `permission_callback` for visibility + per-site capability check in `execute_callback` |
 | REST endpoints | Authentication required + `edit_theme_options` capability check |
 | Content writes | `wp_kses_post` for non-super-admin users; `wp_strip_all_tags` for titles; `sanitize_textarea_field` for excerpts/descriptions |
 | Options writes | Explicit allowlist — unlisted keys are silently skipped |
 | Options reads | Blocklist for credentials (auth keys/salts, DB/mail credentials) — returns `[redacted]` |
+| Post types | Validated at runtime via `get_post_type_object()` — only registered types are accepted |
+| Custom fields | Writes restricted to keys registered via `register_post_meta()` (defence-in-depth) |
 | Roles | Enum-validated (`administrator`, `editor`, `author`, `contributor`, `subscriber`) |
 | Statuses | Enum-validated (`draft`, `publish`, `pending`, `private`, optionally `trash`) |
 | Areas | Enum-validated (`header`, `footer`, `sidebar`, `uncategorized`) |
@@ -143,7 +157,27 @@ The plugin is split into two files:
 | Categories | Capped at 20 per create/update to prevent abuse |
 | Delete operations | Not exposed — no delete abilities registered, no delete capabilities granted |
 
+## Development
+
+```bash
+composer install          # Install dev dependencies
+composer run phpcs        # WordPress Coding Standards + PHP compatibility
+composer run phpcbf       # Auto-fix PHPCS violations
+composer run phpstan      # Static analysis (level 6, WordPress stubs)
+composer run lint         # Run both PHPCS and PHPStan
+```
+
 ## Changelog
+
+### 1.5.0
+- **Single-site compatibility** — site-level abilities (content, options, Site Editor) now register on both single-site and Multisite installations; network-level abilities remain Multisite-only
+- Added multisite-compatibility helpers (`vip_mcp_resolve_site_id`, `vip_mcp_validate_site`, `vip_mcp_switch_to_site`, `vip_mcp_restore_site`, `vip_mcp_required_with_site_id`) so the same code runs on both configurations
+- `site_id` parameter is now optional on single-site (defaults to current blog)
+- **Granular permissions** — replaced blanket `manage_network_options` with a two-layer model: `permission_callback` gates visibility by capability tier; `execute_callback` enforces per-site capabilities after `switch_to_blog()`
+- Content reads require `read`; content writes require `edit_posts` + post-type caps; options require `manage_options`; Site Editor requires `edit_theme_options`
+- **Custom post type support** — new `list-post-types` ability for CPT discovery; `create-post` and `list-posts` now accept any registered post type (not just `post`/`page`), validated at runtime via `get_post_type_object()`
+- **Custom field support** — `create-post`, `get-post`, and `update-post` now read/write registered custom fields via `meta` parameter (restricted to keys registered with `register_post_meta()`)
+- Added PHPCS (WordPress Coding Standards + PHP Compatibility) and PHPStan (level 6) tooling
 
 ### 1.3.0
 - Added Site Editor abilities: templates, template parts, and synced patterns (10 new abilities)
