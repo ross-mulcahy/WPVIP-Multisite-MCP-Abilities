@@ -886,7 +886,7 @@ function vip_mcp_register_ability_get_template_part(): void {
 					'title'       => array( 'type' => 'string' ),
 					'description' => array( 'type' => 'string' ),
 					'content'     => array( 'type' => 'string' ),
-					'area'        => array( 'type' => 'string' ),
+					'area'        => array( 'type' => array( 'string', 'null' ) ),
 					'theme'       => array( 'type' => 'string' ),
 					'source'      => array( 'type' => 'string' ),
 					'has_post'    => array( 'type' => 'boolean' ),
