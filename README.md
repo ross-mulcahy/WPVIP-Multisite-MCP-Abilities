@@ -1,6 +1,6 @@
 # WPVIP MCP Abilities
 
-A WordPress plugin (v1.5.3) that registers **28 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
+A WordPress plugin (v1.6.0) that registers **38 MCP abilities** for managing WordPress sites via AI agents. Works on both single-site and Multisite installations. Site-level abilities (content, taxonomies, media, options, Site Editor) register everywhere; network-level abilities (sites, users, themes, plugins) register only on Multisite.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ wp-content/plugins/
 
 2. **Activate** the plugin from the Plugins screen (or via WP-CLI: `wp plugin activate WPVIP-Multisite-MCP-Abilities`). On Multisite, you can also network-activate from Network Admin → Plugins (or `wp plugin activate WPVIP-Multisite-MCP-Abilities --network`).
 
-On single-site, 18 site-level abilities register. On Multisite, all 28 abilities register (whether activated per-site or network-wide).
+On single-site, 28 site-level abilities register. On Multisite, all 38 abilities register (whether activated per-site or network-wide).
 
 ## Permissions
 
@@ -37,8 +37,10 @@ Abilities use a two-layer permission model:
 | Ability group | permission_callback | Per-site check |
 |---|---|---|
 | Network ops (sites, users, themes, plugins) | `manage_network_options` | — |
-| Content reads (list-post-types, get-post, list-posts) | `read` | `read` / `read_post` on target site |
-| Content writes (create-post, update-post) | `edit_posts` | Post-type caps (`edit_posts`, `publish_posts`) on target site |
+| Content reads (inventory, post types, taxonomies, terms, posts) | `read` | `read` / `read_post` on target site |
+| Content writes (create/update posts, assign terms, rewrite content) | `edit_posts` | Post-type caps (`edit_posts`, `publish_posts`), `edit_post`, and taxonomy assign caps on target site |
+| Term writes (create/update terms) | `manage_categories` | Taxonomy caps (`manage_terms`, `edit_terms`) on target site |
+| Media reads/copy | `upload_files` | `upload_files`, `read_post`, and optional parent `edit_post` on target site |
 | Site options (get/update) | `manage_options` | `manage_options` on target site |
 | Site editor (templates, parts, patterns) | `edit_theme_options` | `edit_theme_options` on target site |
 
@@ -69,15 +71,41 @@ Abilities use a two-layer permission model:
 | `list-themes` | Read | All installed themes with network-enabled status. Optionally shows which is active on a given site. |
 | `activate-theme` | Write | Activates a theme on a specific site. Auto-network-enables the theme if needed (controllable via `network_enable`). |
 
+### Site Inventory (1 ability)
+
+| Ability | Type | Description |
+|---------|------|-------------|
+| `inventory-site` | Read | Compact migration inventory: site identity, active theme, key options, public post type counts, taxonomy counts, and media counts. |
+
+### Taxonomy & Term Management (6 abilities)
+
+| Ability | Type | Description |
+|---------|------|-------------|
+| `list-taxonomies` | Read | Discovers registered taxonomies on a site, optionally scoped to a post type. |
+| `list-terms` | Read | Paginated list of terms for a taxonomy, including hierarchy, URLs, and registered term meta. |
+| `get-term` | Read | Retrieves a term by ID or slug, including registered term meta. |
+| `create-term` | Write | Creates a taxonomy term with slug, description, parent, and registered term meta. |
+| `update-term` | Write | Updates a taxonomy term and registered term meta. |
+| `assign-post-terms` | Write | Assigns or appends terms to a post/page/CPT entry. Supports IDs, slugs, names, and optional missing-term creation. |
+
 ### Content Management (5 abilities)
 
 | Ability | Type | Description |
 |---------|------|-------------|
 | `list-post-types` | Read | Discovers all registered post types on a site, including custom post types. Returns labels, capabilities, supported features, REST info, and connected taxonomies. |
-| `create-post` | Write | Creates a post, page, or custom post type entry. Supports title, content (HTML/blocks), status, excerpt, slug, template, author, and custom fields (meta). |
-| `get-post` | Read | Retrieves any post by ID including content, status, permalink, edit URL, template, and registered custom field values. |
-| `update-post` | Write | Partial updates — only include fields to change. Supports title, content, excerpt, status, slug, template, and custom fields (meta). |
-| `list-posts` | Read | Paginated list of any post type with status and search filters. |
+| `create-post` | Write | Creates a post, page, or custom post type entry. Supports title, content (HTML/blocks), status, excerpt, slug, template, author, parent, menu order, comment/ping status, featured image, terms, and registered custom fields. |
+| `get-post` | Read | Retrieves any post by ID including content, status, permalink, edit URL, template, parent/author/menu metadata, featured image, assigned terms, and registered custom field values. |
+| `update-post` | Write | Partial updates — only include fields to change. Supports title, content, excerpt, status, slug, author, parent, menu order, comment/ping status, template, featured image, terms, and registered custom fields. |
+| `list-posts` | Read | Paginated list of any post type with status, search, author, parent, and taxonomy filters. Can optionally include assigned terms. |
+
+### Media & Content Rewriting (4 abilities)
+
+| Ability | Type | Description |
+|---------|------|-------------|
+| `list-media` | Read | Paginated list of media attachments with source URLs, alt text, captions, descriptions, metadata, parent IDs, and file details. |
+| `get-media` | Read | Retrieves a single attachment by ID with source URL, alt text, caption, description, and metadata. |
+| `copy-media-to-site` | Write | Copies an attachment from a source site to a target site, preserving media fields and returning a source URL to target URL map. |
+| `rewrite-content-links` | Write | Rewrites exact URLs or strings in supplied content or an existing post using a source-to-target map. Useful after copying media and linked posts. |
 
 ### Site Options (2 abilities)
 
@@ -86,7 +114,7 @@ Abilities use a two-layer permission model:
 | `get-site-option` | Read | Reads up to 20 options from a sub-site. Sensitive keys (auth salts, DB credentials, mail server passwords) are automatically redacted. |
 | `update-site-option` | Write | Writes options from a curated allowlist. Supports page-ID-by-title resolution for `page_on_front` / `page_for_posts`. |
 
-**Write-allowlisted options:** `blogname`, `blogdescription`, `show_on_front`, `page_on_front`, `page_for_posts`, `posts_per_page`, `posts_per_rss`, `rss_use_excerpt`, `blog_public`, `default_category`, `default_post_format`, `default_pingback_flag`, `default_comment_status`, `default_ping_status`, `require_name_email`, `comment_registration`, `close_comments_for_old_posts`, `close_comments_days_old`, `thread_comments`, `thread_comments_depth`, `page_comments`, `comments_per_page`, `default_comments_page`, `comment_order`, `comments_notify`, `moderation_notify`, `comment_moderation`, `comment_whitelist`, `comment_max_links`, `date_format`, `time_format`, `start_of_week`, `timezone_string`, `gmt_offset`, `permalink_structure`, `category_base`, `tag_base`, `thumbnail_size_w`, `thumbnail_size_h`, `thumbnail_crop`, `medium_size_w`, `medium_size_h`, `large_size_w`, `large_size_h`, `uploads_use_yearmonth_folders`.
+**Write-allowlisted options:** `blogname`, `blogdescription`, `WPLANG`, `show_on_front`, `page_on_front`, `page_for_posts`, `posts_per_page`, `posts_per_rss`, `rss_use_excerpt`, `blog_public`, `default_category`, `default_post_format`, `default_pingback_flag`, `default_comment_status`, `default_ping_status`, `require_name_email`, `comment_registration`, `close_comments_for_old_posts`, `close_comments_days_old`, `thread_comments`, `thread_comments_depth`, `page_comments`, `comments_per_page`, `default_comments_page`, `comment_order`, `comments_notify`, `moderation_notify`, `comment_moderation`, `comment_whitelist`, `comment_max_links`, `date_format`, `time_format`, `start_of_week`, `timezone_string`, `gmt_offset`, `permalink_structure`, `category_base`, `tag_base`, `thumbnail_size_w`, `thumbnail_size_h`, `thumbnail_crop`, `medium_size_w`, `medium_size_h`, `large_size_w`, `large_size_h`, `uploads_use_yearmonth_folders`.
 
 ### Site Editor — Templates (3 abilities)
 
@@ -119,7 +147,7 @@ Abilities use a two-layer permission model:
 
 The plugin is split into two files:
 
-**`wpvip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category, multisite-compatibility helpers, and all network/content/options abilities. Loads the site editor file via `require_once`.
+**`wpvip-multisite-mcp-abilities.php`** — Main plugin file. Registers the `vip-multisite` ability category, multisite-compatibility helpers, and all network/content/taxonomy/media/options abilities. Loads the site editor file via `require_once`.
 
 **`wpvip-mcp-site-editor-abilities.php`** — Site Editor abilities plus REST API defence-in-depth infrastructure. Organised into five sections:
 
@@ -149,7 +177,8 @@ The plugin is split into two files:
 | Options writes | Explicit allowlist — unlisted keys are silently skipped |
 | Options reads | Blocklist for credentials (auth keys/salts, DB/mail credentials) — returns `[redacted]` |
 | Post types | Validated at runtime via `get_post_type_object()` — only registered types are accepted |
-| Custom fields | Writes restricted to keys registered via `register_post_meta()` (defence-in-depth) |
+| Taxonomies | Validated at runtime via `get_taxonomy()` and `is_object_in_taxonomy()` — only registered taxonomies assigned to the post type are accepted |
+| Custom fields | Writes restricted to keys registered via `register_post_meta()` / `register_term_meta()` (defence-in-depth) |
 | Roles | Enum-validated (`administrator`, `editor`, `author`, `contributor`, `subscriber`) |
 | Statuses | Enum-validated (`draft`, `publish`, `pending`, `private`, optionally `trash`) |
 | Areas | Enum-validated (`header`, `footer`, `sidebar`, `uncategorized`) |
@@ -168,6 +197,14 @@ composer run lint         # Run both PHPCS and PHPStan
 ```
 
 ## Changelog
+
+### 1.6.0
+- Added site inventory ability for translation/migration planning
+- Added taxonomy and term abilities: list taxonomies, list/get/create/update terms, and assign post terms
+- Expanded post create/get/update/list support for terms, featured images, parent IDs, author IDs, menu order, comment/ping status, and taxonomy filters
+- Added media abilities for listing, reading, and copying attachments between sites
+- Added content link rewriting ability for source-to-target URL maps after media/content copy
+- Added `WPLANG` to the safe option allowlist for translated site setup
 
 ### 1.5.3
 - Removed `Network: true` plugin header so the plugin can be activated on single-site installations
